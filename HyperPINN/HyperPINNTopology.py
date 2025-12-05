@@ -38,11 +38,11 @@ class HyperPINNTopology(nn.Module):
             self.norm2 = nn.LayerNorm(hidden_dim)
             self.output_proj = nn.Linear(hidden_dim, output_dim)
         elif use_resnet:
-            self.input_layer = nn.Linear(input_dim, hidden_dim * 2)
+            self.input_layer = nn.Linear(input_dim, hidden_dim)
             self.res_blocks = nn.ModuleList()
             for _ in range(num_layers - 2):
-                self.res_blocks.append(ResidualBlock(hidden_dim * 2))
-            self.output_layer = nn.Linear(hidden_dim * 2, output_dim)
+                self.res_blocks.append(ResidualBlock(hidden_dim))
+            self.output_layer = nn.Linear(hidden_dim, output_dim)
         else:
             raise ValueError("Specify one of: use_resnet=True or use_attention=True")
         
@@ -280,7 +280,7 @@ class HyperPINNTopology(nn.Module):
         coup_sexts = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         coup_septs = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = \
-            self.get_sparse_weights(use_concrete=False, hard=True)
+            self.get_sparse_weights(use_concrete=False, hard=False)
 
         for idx, (i, j) in enumerate(self.edge_indices):
             w = edge_probs[idx]

@@ -131,7 +131,7 @@ true_6edges = set(tuple(sorted(sext)) for sext in SextList)
 true_7edges = set(tuple(sorted(sept)) for sept in SeptList)
 
 M = 300              # Increase time steps (was 150)
-tmax = 40            # Extend time range (was 20)
+tmax = 20            # Extend time range (was 20)
 dt = tmax / M
 t_eval = np.linspace(0, tmax, M+1)
 t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1) 
@@ -227,7 +227,7 @@ model = HyperPINNTopology(N=N, output_dim=3*N, use_resnet=use_resnet, use_attent
 model.initialize_from_ground_truth(
     true_2edges, true_3edges, true_4edges,
     true_5edges, true_6edges, true_7edges,
-    remove_edges={2:1}, init_strength=0.5
+    remove_edges=None, init_strength=0.5
 )
 
 model.lambda_l1_edges = 0.03      
@@ -342,7 +342,7 @@ for epoch in range(epochs):
         sparsity_weight = 1.0
        
     if epoch < stage1_epochs:
-        physics_weight = 0
+        physics_weight = 0.1
         data_weight = 1.0
         sparsity_weight = 0.0
         print_prefix = "Stage 1 (Data Fitting)"    
@@ -356,7 +356,7 @@ for epoch in range(epochs):
         progress = min(1.0, (epoch - stage2_epochs) / (epochs - stage2_epochs))
         physics_weight = 1.0
         data_weight = 0.2
-        sparsity_weight = 0.1 * progress  
+        sparsity_weight = 0.01 * progress  
         if hasattr(model, 'temperature'):
             model.temperature = max(0.5, 1.0 * (0.995 ** ((epoch - stage2_epochs) // 100)))
            
