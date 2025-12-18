@@ -18,11 +18,12 @@ class ResidualBlock(nn.Module):
         return x + self.net(x)
 
 class HyperPINNTopology(nn.Module):
-    def __init__(self, N, output_dim, hidden_dim=64, num_layers=4, use_resnet=True, use_attention=False):
+    def __init__(self, N, output_dim, hidden_dim=64, num_layers=4, use_resnet=True, use_attention=False, max_order=7):
         super().__init__() 
         self.N = N
         self.use_resnet = use_resnet
         self.use_attention = use_attention
+        self.max_order = max_order
         input_dim = 1
 
         if use_attention:
@@ -45,19 +46,24 @@ class HyperPINNTopology(nn.Module):
         else:
             raise ValueError("Specify one of: use_resnet=True or use_attention=True")
         
-        num_edges = N * (N-1)//2
-        num_triangles = N * (N-1) * (N-2) // 6
-        num_quads = N * (N-1) * (N-2) * (N-3) // 24
-        num_quints = N * (N-1) * (N-2) * (N-3) * (N-4) // 120
-        num_sexts = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) // 720
-        num_septs = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) * (N-6) // 5040
-        
-        self.edge_weights = nn.Parameter(torch.randn(num_edges) * 0.1)  
-        self.triangle_weights = nn.Parameter(torch.randn(num_triangles) * 0.1)
-        self.quad_weights = nn.Parameter(torch.randn(num_quads) * 0.1)
-        self.quint_weights = nn.Parameter(torch.randn(num_quints) * 0.1)
-        self.sext_weights = nn.Parameter(torch.randn(num_sexts) * 0.1)
-        self.sept_weights = nn.Parameter(torch.randn(num_septs) * 0.1)
+        if max_order >= 2:
+            num_edges = N * (N-1)//2
+            self.edge_weights = nn.Parameter(torch.randn(num_edges) * 0.1)
+        if max_order >= 3:
+            num_triangles = N * (N-1) * (N-2) // 6
+            self.triangle_weights = nn.Parameter(torch.randn(num_triangles) * 0.1)
+        if max_order >= 4:
+            num_quads = N * (N-1) * (N-2) * (N-3) // 24
+            self.quad_weights = nn.Parameter(torch.randn(num_quads) * 0.1)
+        if max_order >= 5:
+            num_quints = N * (N-1) * (N-2) * (N-3) * (N-4) // 120
+            self.quint_weights = nn.Parameter(torch.randn(num_quints) * 0.1)
+        if max_order >= 6:
+            num_sexts = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) // 720
+            self.sext_weights = nn.Parameter(torch.randn(num_sexts) * 0.1)
+        if max_order >= 7:
+            num_septs = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) * (N-6) // 5040
+            self.sept_weights = nn.Parameter(torch.randn(num_septs) * 0.1)
         
         self.lambda_l1_edges = 0.01      
         self.lambda_l1_triangles = 0.01 
@@ -72,12 +78,24 @@ class HyperPINNTopology(nn.Module):
         self.lambda_l0_sexts = 0.001
         self.lambda_l0_septs = 0.001
         self.temperature = 1.0           
-        self.edge_indices = list(combinations(range(N), 2))
-        self.triangle_indices = list(combinations(range(N), 3))
-        self.quad_indices = list(combinations(range(N), 4))
-        self.quint_indices = list(combinations(range(N), 5))
-        self.sext_indices = list(combinations(range(N), 6))
-        self.sept_indices = list(combinations(range(N), 7))
+        if max_order >= 2:
+            self.edge_indices = list(combinations(range(N), 2))
+            self.edge_indices_t = torch.tensor(self.edge_indices, dtype=torch.long)
+        if max_order >= 3:
+            self.triangle_indices = list(combinations(range(N), 3))
+            self.triangle_indices_t = torch.tensor(self.triangle_indices, dtype=torch.long)
+        if max_order >= 4:
+            self.quad_indices = list(combinations(range(N), 4))
+            self.quad_indices_t = torch.tensor(self.quad_indices, dtype=torch.long)
+        if max_order >= 5:
+            self.quint_indices = list(combinations(range(N), 5))
+            self.quint_indices_t = torch.tensor(self.quint_indices, dtype=torch.long)
+        if max_order >= 6:
+            self.sext_indices = list(combinations(range(N), 6))
+            self.sext_indices_t = torch.tensor(self.sext_indices, dtype=torch.long)
+        if max_order >= 7:
+            self.sept_indices = list(combinations(range(N), 7))
+            self.sept_indices_t = torch.tensor(self.sept_indices, dtype=torch.long)
     
     def initialize_from_ground_truth(self, true_2edges, true_3edges, true_4edges, true_5edges, 
     true_6edges, true_7edges, remove_edges=None, init_strength=2.0):
@@ -191,50 +209,78 @@ class HyperPINNTopology(nn.Module):
         return y
     
     def get_sparse_weights(self, use_concrete=True, hard=False):
+        edge_probs = triangle_probs = quad_probs = quint_probs = sext_probs = sept_probs = None
+        
         if use_concrete:
-            edge_probs = self.concrete_binary_gates(self.edge_weights, self.temperature, hard)
-            triangle_probs = self.concrete_binary_gates(self.triangle_weights, self.temperature, hard)
-            quad_probs = self.concrete_binary_gates(self.quad_weights, self.temperature, hard)
-            quint_probs = self.concrete_binary_gates(self.quint_weights, self.temperature, hard)
-            sext_probs = self.concrete_binary_gates(self.sext_weights, self.temperature, hard)
-            sept_probs = self.concrete_binary_gates(self.sept_weights, self.temperature, hard)
+            if self.max_order >= 2:
+                edge_probs = self.concrete_binary_gates(self.edge_weights, self.temperature, hard)
+            if self.max_order >= 3:
+                triangle_probs = self.concrete_binary_gates(self.triangle_weights, self.temperature, hard)
+            if self.max_order >= 4:
+                quad_probs = self.concrete_binary_gates(self.quad_weights, self.temperature, hard)
+            if self.max_order >= 5:
+                quint_probs = self.concrete_binary_gates(self.quint_weights, self.temperature, hard)
+            if self.max_order >= 6:
+                sext_probs = self.concrete_binary_gates(self.sext_weights, self.temperature, hard)
+            if self.max_order >= 7:
+                sept_probs = self.concrete_binary_gates(self.sept_weights, self.temperature, hard)
         else:
-            edge_probs = torch.sigmoid(self.edge_weights)
-            triangle_probs = torch.sigmoid(self.triangle_weights)
-            quad_probs = torch.sigmoid(self.quad_weights)
-            quint_probs = torch.sigmoid(self.quint_weights)
-            sext_probs = torch.sigmoid(self.sext_weights)
-            sept_probs = torch.sigmoid(self.sept_weights)
+            if self.max_order >= 2:
+                edge_probs = torch.sigmoid(self.edge_weights)
+            if self.max_order >= 3:
+                triangle_probs = torch.sigmoid(self.triangle_weights)
+            if self.max_order >= 4:
+                quad_probs = torch.sigmoid(self.quad_weights)
+            if self.max_order >= 5:
+                quint_probs = torch.sigmoid(self.quint_weights)
+            if self.max_order >= 6:
+                sext_probs = torch.sigmoid(self.sext_weights)
+            if self.max_order >= 7:
+                sept_probs = torch.sigmoid(self.sept_weights)
             if hard:
-                edge_probs = (edge_probs > 0.5).float() - edge_probs.detach() + edge_probs
-                triangle_probs = (triangle_probs > 0.5).float() - triangle_probs.detach() + triangle_probs
-                quad_probs = (quad_probs > 0.5).float() - quad_probs.detach() + quad_probs
-                quint_probs = (quint_probs > 0.5).float() - quint_probs.detach() + quint_probs
-                sext_probs = (sext_probs > 0.5).float() - sext_probs.detach() + sext_probs
-                sept_probs = (sept_probs > 0.5).float() - sept_probs.detach() + sept_probs
+                if edge_probs is not None:
+                    edge_probs = (edge_probs > 0.5).float() - edge_probs.detach() + edge_probs
+                if triangle_probs is not None:
+                    triangle_probs = (triangle_probs > 0.5).float() - triangle_probs.detach() + triangle_probs
+                if quad_probs is not None:
+                    quad_probs = (quad_probs > 0.5).float() - quad_probs.detach() + quad_probs
+                if quint_probs is not None:
+                    quint_probs = (quint_probs > 0.5).float() - quint_probs.detach() + quint_probs
+                if sext_probs is not None:
+                    sext_probs = (sext_probs > 0.5).float() - sext_probs.detach() + sext_probs
+                if sept_probs is not None:
+                    sept_probs = (sept_probs > 0.5).float() - sept_probs.detach() + sept_probs
 
         return edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs
     
     def sparsity_regularization(self):
-        edge_probs = torch.sigmoid(self.edge_weights)
-        triangle_probs = torch.sigmoid(self.triangle_weights)
-        quad_probs = torch.sigmoid(self.quad_weights)
-        quint_probs = torch.sigmoid(self.quint_weights)
-        sext_probs = torch.sigmoid(self.sext_weights)
-        sept_probs = torch.sigmoid(self.sept_weights)
-        l1_edges = torch.sum(edge_probs)
-        l1_triangles = torch.sum(triangle_probs)
-        l1_quads = torch.sum(quad_probs)
-        l1_quints = torch.sum(quint_probs)
-        l1_sexts = torch.sum(sext_probs)
-        l1_septs = torch.sum(sept_probs)
-
-        l0_edges = torch.sum(edge_probs * (1 - edge_probs) * 4)
-        l0_triangles = torch.sum(triangle_probs * (1 - triangle_probs) * 4)
-        l0_quads = torch.sum(quad_probs * (1 - quad_probs) * 4)
-        l0_quints = torch.sum(quint_probs * (1 - quint_probs) * 4)
-        l0_sexts = torch.sum(sext_probs * (1 - sext_probs) * 4)
-        l0_septs = torch.sum(sept_probs * (1 - sept_probs) * 4)
+        l1_edges = l1_triangles = l1_quads = l1_quints = l1_sexts = l1_septs = 0.0
+        l0_edges = l0_triangles = l0_quads = l0_quints = l0_sexts = l0_septs = 0.0
+        
+        if self.max_order >= 2:
+            edge_probs = torch.sigmoid(self.edge_weights)
+            l1_edges = torch.sum(edge_probs)
+            l0_edges = torch.sum(edge_probs * (1 - edge_probs) * 4)
+        if self.max_order >= 3:
+            triangle_probs = torch.sigmoid(self.triangle_weights)
+            l1_triangles = torch.sum(triangle_probs)
+            l0_triangles = torch.sum(triangle_probs * (1 - triangle_probs) * 4)
+        if self.max_order >= 4:
+            quad_probs = torch.sigmoid(self.quad_weights)
+            l1_quads = torch.sum(quad_probs)
+            l0_quads = torch.sum(quad_probs * (1 - quad_probs) * 4)
+        if self.max_order >= 5:
+            quint_probs = torch.sigmoid(self.quint_weights)
+            l1_quints = torch.sum(quint_probs)
+            l0_quints = torch.sum(quint_probs * (1 - quint_probs) * 4)
+        if self.max_order >= 6:
+            sext_probs = torch.sigmoid(self.sext_weights)
+            l1_sexts = torch.sum(sext_probs)
+            l0_sexts = torch.sum(sext_probs * (1 - sext_probs) * 4)
+        if self.max_order >= 7:
+            sept_probs = torch.sigmoid(self.sept_weights)
+            l1_septs = torch.sum(sept_probs)
+            l0_septs = torch.sum(sept_probs * (1 - sept_probs) * 4)
 
         sparsity_loss = (
             self.lambda_l1_edges * l1_edges + self.lambda_l1_triangles * l1_triangles +
@@ -246,12 +292,18 @@ class HyperPINNTopology(nn.Module):
         )
 
         return sparsity_loss, {
-            'l1_edges': l1_edges.item(), 'l1_triangles': l1_triangles.item(),
-            'l1_quads': l1_quads.item(), 'l1_quints': l1_quints.item(),
-            'l1_sexts': l1_sexts.item(), 'l1_septs': l1_septs.item(),
-            'l0_edges': l0_edges.item(), 'l0_triangles': l0_triangles.item(),
-            'l0_quads': l0_quads.item(), 'l0_quints': l0_quints.item(),
-            'l0_sexts': l0_sexts.item(), 'l0_septs': l0_septs.item()
+            'l1_edges': l1_edges.item() if isinstance(l1_edges, torch.Tensor) else l1_edges,
+            'l1_triangles': l1_triangles.item() if isinstance(l1_triangles, torch.Tensor) else l1_triangles,
+            'l1_quads': l1_quads.item() if isinstance(l1_quads, torch.Tensor) else l1_quads,
+            'l1_quints': l1_quints.item() if isinstance(l1_quints, torch.Tensor) else l1_quints,
+            'l1_sexts': l1_sexts.item() if isinstance(l1_sexts, torch.Tensor) else l1_sexts,
+            'l1_septs': l1_septs.item() if isinstance(l1_septs, torch.Tensor) else l1_septs,
+            'l0_edges': l0_edges.item() if isinstance(l0_edges, torch.Tensor) else l0_edges,
+            'l0_triangles': l0_triangles.item() if isinstance(l0_triangles, torch.Tensor) else l0_triangles,
+            'l0_quads': l0_quads.item() if isinstance(l0_quads, torch.Tensor) else l0_quads,
+            'l0_quints': l0_quints.item() if isinstance(l0_quints, torch.Tensor) else l0_quints,
+            'l0_sexts': l0_sexts.item() if isinstance(l0_sexts, torch.Tensor) else l0_sexts,
+            'l0_septs': l0_septs.item() if isinstance(l0_septs, torch.Tensor) else l0_septs
         }
      
     def physics_loss(self,t):
@@ -279,56 +331,115 @@ class HyperPINNTopology(nn.Module):
         coup_sexts = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         coup_septs = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = \
-            self.get_sparse_weights(use_concrete=False, hard=False)
+            self.get_sparse_weights(use_concrete=False, hard=True)
 
-        for idx, (i, j) in enumerate(self.edge_indices):
-            w = edge_probs[idx]
-            coup_rete[:, i] += w * (x_old[:, j] - x_old[:, i])
-            coup_rete[:, j] += w * (x_old[:, i] - x_old[:, j])
+        if self.max_order >= 2:
+            edge_idx = self.edge_indices_t.to(x_old.device)
+            i_nodes = edge_idx[:, 0]
+            j_nodes = edge_idx[:, 1]
+            x_i = x_old[:, i_nodes]
+            x_j = x_old[:, j_nodes]
+            w = edge_probs.unsqueeze(0)
+            coup_rete.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (x_j - x_i))
+            coup_rete.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (x_i - x_j))
 
         # triangle (3-body) coupling
-        for idx, (i, j, k_idx) in enumerate(self.triangle_indices):
-            w = triangle_probs[idx]
-            coup_simplicial[:, i] += w * (x_old[:, j]**2 * x_old[:, k_idx] - x_old[:, i]**3 + x_old[:, j] * x_old[:, k_idx]**2 - x_old[:, i]**3)
-            coup_simplicial[:, j] += w * (x_old[:, i]**2 * x_old[:, k_idx] - x_old[:, j]**3 + x_old[:, i] * x_old[:, k_idx]**2 - x_old[:, j]**3)
-            coup_simplicial[:, k_idx] += w * (x_old[:, i]**2 * x_old[:, j] - x_old[:, k_idx]**3 + x_old[:, i] * x_old[:, j]**2 - x_old[:, k_idx]**3)
+        if self.max_order >= 3:
+            tri_idx = self.triangle_indices_t.to(x_old.device)
+            i_nodes = tri_idx[:, 0]
+            j_nodes = tri_idx[:, 1]
+            k_nodes = tri_idx[:, 2]
+            x_i = x_old[:, i_nodes]
+            x_j = x_old[:, j_nodes]
+            x_k = x_old[:, k_nodes]
+            w = triangle_probs.unsqueeze(0)
+            coup_simplicial.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (x_j**2 * x_k - x_i**3 + x_j * x_k**2 - x_i**3))
+            coup_simplicial.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (x_i**2 * x_k - x_j**3 + x_i * x_k**2 - x_j**3))
+            coup_simplicial.scatter_add_(1, k_nodes.unsqueeze(0).expand(B, -1), w * (x_i**2 * x_j - x_k**3 + x_i * x_j**2 - x_k**3))
 
         # quad (4-body) coupling
-        for idx, (i, j, k_idx, l) in enumerate(self.quad_indices):
-            w = quad_probs[idx]
-            coup_quads[:, i] += w * (x_old[:, j]**2 * x_old[:, k_idx] * x_old[:, l] - x_old[:, i]**3)
-            coup_quads[:, j] += w * (x_old[:, i]**2 * x_old[:, k_idx] * x_old[:, l] - x_old[:, j]**3)
-            coup_quads[:, k_idx] += w * (x_old[:, i]**2 * x_old[:, j] * x_old[:, l] - x_old[:, k_idx]**3)
-            coup_quads[:, l] += w * (x_old[:, i]**2 * x_old[:, j] * x_old[:, k_idx] - x_old[:, l]**3)
+        if self.max_order >= 4:
+            quad_idx = self.quad_indices_t.to(x_old.device)
+            i_nodes = quad_idx[:, 0]
+            j_nodes = quad_idx[:, 1]
+            k_nodes = quad_idx[:, 2]
+            l_nodes = quad_idx[:, 3]
+            x_i = x_old[:, i_nodes]
+            x_j = x_old[:, j_nodes]
+            x_k = x_old[:, k_nodes]
+            x_l = x_old[:, l_nodes]
+            w = quad_probs.unsqueeze(0)
+            coup_quads.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (x_j**2 * x_k * x_l - x_i**3))
+            coup_quads.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (x_i**2 * x_k * x_l - x_j**3))
+            coup_quads.scatter_add_(1, k_nodes.unsqueeze(0).expand(B, -1), w * (x_i**2 * x_j * x_l - x_k**3))
+            coup_quads.scatter_add_(1, l_nodes.unsqueeze(0).expand(B, -1), w * (x_i**2 * x_j * x_k - x_l**3))
 
-        # quint (5-body) coupling
-        for idx, (i, j, k_idx, l, m) in enumerate(self.quint_indices):
-            w = quint_probs[idx]
-            coup_quints[:, i] += w * (y_old[:, j]**2 * y_old[:, k_idx] * y_old[:, l] * y_old[:, m] - y_old[:, i]**3)
-            coup_quints[:, j] += w * (y_old[:, i]**2 * y_old[:, k_idx] * y_old[:, l] * y_old[:, m] - y_old[:, j]**3)
-            coup_quints[:, k_idx] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, l] * y_old[:, m] - y_old[:, k_idx]**3)
-            coup_quints[:, l] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, k_idx] * y_old[:, m] - y_old[:, l]**3)
-            coup_quints[:, m] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, k_idx] * y_old[:, l] - y_old[:, m]**3)
+        if self.max_order >= 5:
+            quint_idx = self.quint_indices_t.to(y_old.device)
+            i_nodes = quint_idx[:, 0]
+            j_nodes = quint_idx[:, 1]
+            k_nodes = quint_idx[:, 2]
+            l_nodes = quint_idx[:, 3]
+            m_nodes = quint_idx[:, 4]
+            y_i = y_old[:, i_nodes]
+            y_j = y_old[:, j_nodes]
+            y_k = y_old[:, k_nodes]
+            y_l = y_old[:, l_nodes]
+            y_m = y_old[:, m_nodes]
+            w = quint_probs.unsqueeze(0)
+            coup_quints.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (y_j**2 * y_k * y_l * y_m - y_i**3))
+            coup_quints.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_k * y_l * y_m - y_j**3))
+            coup_quints.scatter_add_(1, k_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_l * y_m - y_k**3))
+            coup_quints.scatter_add_(1, l_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_k * y_m - y_l**3))
+            coup_quints.scatter_add_(1, m_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_k * y_l - y_m**3))
         # sext (6-body) coupling
-        for idx, (i, j, k_idx, l, m, n) in enumerate(self.sext_indices):
-            w = sext_probs[idx]
-            coup_sexts[:, i] += w * (y_old[:, j]**2 * y_old[:, k_idx] * y_old[:, l] * y_old[:, m] * y_old[:, n] - y_old[:, i]**3)
-            coup_sexts[:, j] += w * (y_old[:, i]**2 * y_old[:, k_idx] * y_old[:, l] * y_old[:, m] * y_old[:, n] - y_old[:, j]**3)
-            coup_sexts[:, k_idx] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, l] * y_old[:, m] * y_old[:, n] - y_old[:, k_idx]**3)
-            coup_sexts[:, l] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, k_idx] * y_old[:, m] * y_old[:, n] - y_old[:, l]**3)
-            coup_sexts[:, m] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, k_idx] * y_old[:, l] * y_old[:, n] - y_old[:, m]**3)
-            coup_sexts[:, n] += w * (y_old[:, i]**2 * y_old[:, j] * y_old[:, k_idx] * y_old[:, l] * y_old[:, m] - y_old[:, n]**3)
+        if self.max_order >= 6:
+            sext_idx = self.sext_indices_t.to(y_old.device)
+            i_nodes = sext_idx[:, 0]
+            j_nodes = sext_idx[:, 1]
+            k_nodes = sext_idx[:, 2]
+            l_nodes = sext_idx[:, 3]
+            m_nodes = sext_idx[:, 4]
+            n_nodes = sext_idx[:, 5]
+            y_i = y_old[:, i_nodes]
+            y_j = y_old[:, j_nodes]
+            y_k = y_old[:, k_nodes]
+            y_l = y_old[:, l_nodes]
+            y_m = y_old[:, m_nodes]
+            y_n = y_old[:, n_nodes]
+            w = sext_probs.unsqueeze(0)
+            coup_sexts.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (y_j**2 * y_k * y_l * y_m * y_n - y_i**3))
+            coup_sexts.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_k * y_l * y_m * y_n - y_j**3))
+            coup_sexts.scatter_add_(1, k_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_l * y_m * y_n - y_k**3))
+            coup_sexts.scatter_add_(1, l_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_k * y_m * y_n - y_l**3))
+            coup_sexts.scatter_add_(1, m_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_k * y_l * y_n - y_m**3))
+            coup_sexts.scatter_add_(1, n_nodes.unsqueeze(0).expand(B, -1), w * (y_i**2 * y_j * y_k * y_l * y_m - y_n**3))
 
         # sept (7-body) coupling
-        for idx, (i, j, k_idx, l, m, n, o) in enumerate(self.sept_indices):
-            w = sept_probs[idx]
-            coup_septs[:, i] += w * (z_old[:, j]**2 * z_old[:, k_idx] * z_old[:, l] * z_old[:, m] * z_old[:, n] * z_old[:, o] - z_old[:, i]**3)
-            coup_septs[:, j] += w * (z_old[:, i]**2 * z_old[:, k_idx] * z_old[:, l] * z_old[:, m] * z_old[:, n] * z_old[:, o] - z_old[:, j]**3)
-            coup_septs[:, k_idx] += w * (z_old[:, i]**2 * z_old[:, j] * z_old[:, l] * z_old[:, m] * z_old[:, n] * z_old[:, o] - z_old[:, k_idx]**3)
-            coup_septs[:, l] += w * (z_old[:, i]**2 * z_old[:, j] * z_old[:, k_idx] * z_old[:, m] * z_old[:, n] * z_old[:, o] - z_old[:, l]**3)
-            coup_septs[:, m] += w * (z_old[:, i]**2 * z_old[:, j] * z_old[:, k_idx] * z_old[:, l] * z_old[:, n] * z_old[:, o] - z_old[:, m]**3)
-            coup_septs[:, n] += w * (z_old[:, i]**2 * z_old[:, j] * z_old[:, k_idx] * z_old[:, l] * z_old[:, m] * z_old[:, o] - z_old[:, n]**3)
-            coup_septs[:, o] += w * (z_old[:, i]**2 * z_old[:, j] * z_old[:, k_idx] * z_old[:, l] * z_old[:, m] * z_old[:, n] - z_old[:, o]**3)
+        if self.max_order >= 7:
+            sept_idx = self.sept_indices_t.to(z_old.device)
+            i_nodes = sept_idx[:, 0]
+            j_nodes = sept_idx[:, 1]
+            k_nodes = sept_idx[:, 2]
+            l_nodes = sept_idx[:, 3]
+            m_nodes = sept_idx[:, 4]
+            n_nodes = sept_idx[:, 5]
+            o_nodes = sept_idx[:, 6]
+            z_i = z_old[:, i_nodes]
+            z_j = z_old[:, j_nodes]
+            z_k = z_old[:, k_nodes]
+            z_l = z_old[:, l_nodes]
+            z_m = z_old[:, m_nodes]
+            z_n = z_old[:, n_nodes]
+            z_o = z_old[:, o_nodes]
+            w = sept_probs.unsqueeze(0)
+            coup_septs.scatter_add_(1, i_nodes.unsqueeze(0).expand(B, -1), w * (z_j**2 * z_k * z_l * z_m * z_n * z_o - z_i**3))
+            coup_septs.scatter_add_(1, j_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_k * z_l * z_m * z_n * z_o - z_j**3))
+            coup_septs.scatter_add_(1, k_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_j * z_l * z_m * z_n * z_o - z_k**3))
+            coup_septs.scatter_add_(1, l_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_j * z_k * z_m * z_n * z_o - z_l**3))
+            coup_septs.scatter_add_(1, m_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_j * z_k * z_l * z_n * z_o - z_m**3))
+            coup_septs.scatter_add_(1, n_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_j * z_k * z_l * z_m * z_o - z_n**3))
+            coup_septs.scatter_add_(1, o_nodes.unsqueeze(0).expand(B, -1), w * (z_i**2 * z_j * z_k * z_l * z_m * z_n - z_o**3))
 
         dxdt_expected = -y_old - z_old + k * coup_rete + kD * coup_simplicial + kD * coup_quads
         dydt_expected = x_old + ar * y_old + kD * coup_quints + kD * coup_sexts

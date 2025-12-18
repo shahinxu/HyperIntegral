@@ -10,7 +10,6 @@ from sklearn.metrics import roc_curve, auc
 import os
 from datetime import datetime
 import networkx as nx
-import time
 
 def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList):
     m1 = len(x)
@@ -106,13 +105,106 @@ def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, Se
     return dxdt
 
 N = 16
-# Sparse hyperedge configuration for 16 nodes
-EdgeList = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12], [13, 14]])
-TriangleList = np.array([[1, 2, 3], [5, 6, 7], [10, 11, 12]])
-QuadList = np.array([[1, 2, 3, 4], [13, 14, 15, 16]])
-QuintList = np.array([[5, 6, 7, 8, 9]])
-SextList = np.array([[9, 10, 11, 12, 13, 14]])
-SeptList = np.array([[1, 4, 7, 10, 13, 15, 16]])
+max_order = 2  # Set the maximum order for training
+gpu_id = 1
+
+def get_hyperedge_config(N):
+    configs = {
+        8: {
+            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7]],
+            'triangles': [[1, 2, 3], [5, 6, 7]],
+            'quads': [[1, 2, 3, 4]],
+            'quints': [[4, 5, 6, 7, 8]],
+            'sexts': [[1, 2, 3, 4, 5, 6]],
+            'septs': [[1, 2, 4, 5, 6, 7, 8]]
+        },
+        9: {
+            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [7, 8]],
+            'triangles': [[1, 2, 3], [5, 6, 7]],
+            'quads': [[1, 2, 3, 4], [6, 7, 8, 9]],
+            'quints': [[1, 2, 3, 4, 5]],
+            'sexts': [[2, 3, 4, 5, 6, 7]],
+            'septs': [[1, 3, 4, 5, 7, 8, 9]]
+        },
+        10: {
+            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [8, 9]],
+            'triangles': [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+            'quads': [[1, 2, 3, 4], [7, 8, 9, 10]],
+            'quints': [[2, 3, 4, 5, 6]],
+            'sexts': [[3, 4, 5, 6, 7, 8]],
+            'septs': [[1, 2, 4, 6, 7, 9, 10]]
+        },
+        11: {
+            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [9, 10]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [8, 9, 10]],
+            'quads': [[1, 2, 3, 4], [8, 9, 10, 11]],
+            'quints': [[3, 4, 5, 6, 7]],
+            'sexts': [[4, 5, 6, 7, 8, 9]],
+            'septs': [[1, 3, 5, 7, 8, 10, 11]]
+        },
+        12: {
+            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [9, 10], [11, 12]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [9, 10, 11]],
+            'quads': [[1, 2, 3, 4], [9, 10, 11, 12]],
+            'quints': [[3, 4, 5, 6, 7]],
+            'sexts': [[5, 6, 7, 8, 9, 10]],
+            'septs': [[1, 3, 5, 7, 9, 11, 12]]
+        },
+        13: {
+            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [8, 9], [11, 12]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
+            'quads': [[1, 2, 3, 4], [10, 11, 12, 13]],
+            'quints': [[4, 5, 6, 7, 8]],
+            'sexts': [[6, 7, 8, 9, 10, 11]],
+            'septs': [[1, 3, 5, 7, 9, 11, 13]]
+        },
+        14: {
+            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [7, 8], [10, 11], [12, 13]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
+            'quads': [[1, 2, 3, 4], [11, 12, 13, 14]],
+            'quints': [[4, 5, 6, 7, 8]],
+            'sexts': [[7, 8, 9, 10, 11, 12]],
+            'septs': [[1, 3, 5, 8, 10, 12, 14]]
+        },
+        15: {
+            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
+            'quads': [[1, 2, 3, 4], [12, 13, 14, 15]],
+            'quints': [[5, 6, 7, 8, 9]],
+            'sexts': [[8, 9, 10, 11, 12, 13]],
+            'septs': [[1, 3, 6, 9, 11, 13, 15]]
+        },
+        16: {
+            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12], [13, 14]],
+            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
+            'quads': [[1, 2, 3, 4], [13, 14, 15, 16]],
+            'quints': [[5, 6, 7, 8, 9]],
+            'sexts': [[9, 10, 11, 12, 13, 14]],
+            'septs': [[1, 4, 7, 10, 13, 15, 16]]
+        }
+    }
+    
+    if N not in configs:
+        raise ValueError(f"N must be one of {list(configs.keys())}, got {N}")
+    
+    config = configs[N]
+    return (
+        np.array(config['edges']),
+        np.array(config['triangles']),
+        np.array(config['quads']),
+        np.array(config['quints']),
+        np.array(config['sexts']),
+        np.array(config['septs'])
+    )
+
+EdgeList, TriangleList_full, QuadList_full, QuintList_full, SextList_full, SeptList_full = get_hyperedge_config(N)
+
+# Automatically adjust ground truth based on max_order
+TriangleList = TriangleList_full if max_order >= 3 else np.array([]).reshape(0, 3)
+QuadList = QuadList_full if max_order >= 4 else np.array([]).reshape(0, 4)
+QuintList = QuintList_full if max_order >= 5 else np.array([]).reshape(0, 5)
+SextList = SextList_full if max_order >= 6 else np.array([]).reshape(0, 6)
+SeptList = SeptList_full if max_order >= 7 else np.array([]).reshape(0, 7)
 
 all_2edges = list(combinations(range(1, N+1), 2))
 all_3edges = list(combinations(range(1, N+1), 3))
@@ -223,8 +315,21 @@ def _save_true_hyperedge_figures(
     plt.close(fig)
 
 _save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges, true_6edges, true_7edges)
+
+# Setup device
+if gpu_id is not None and torch.cuda.is_available():
+    device = torch.device(f'cuda:{gpu_id}')
+    print(f"Using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
+elif torch.cuda.is_available():
+    device = torch.device('cuda')
+    print(f"Using default GPU: {torch.cuda.get_device_name(0)}")
+else:
+    device = torch.device('cpu')
+    print("Using CPU")
+
 arch_name, use_resnet, use_attention = architectures[0]
-model = HyperPINNTopology(N=N, output_dim=3*N, use_resnet=use_resnet, use_attention=use_attention)
+model = HyperPINNTopology(N=N, output_dim=3*N, use_resnet=use_resnet, use_attention=use_attention, max_order=max_order)
+model = model.to(device)
 # model.initialize_from_ground_truth(
 #     true_2edges, true_3edges, true_4edges,
 #     true_5edges, true_6edges, true_7edges,
@@ -246,8 +351,8 @@ model.lambda_l0_septs = 0.005
 optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
 losses = []
 sparsity_stats = []
-t_data = t_data.float()
-x_data = x_data.float()
+t_data = t_data.float().to(device)  # Move to GPU
+x_data = x_data.float().to(device)  # Move to GPU
 
 epochs = 14000
 stage1_epochs = 2500   
@@ -284,12 +389,12 @@ def evaluate_edges_triangles(
 ):
     with torch.no_grad():
         edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = model.get_sparse_weights(use_concrete=False, hard=True)
-        edge_probs = edge_probs.cpu().numpy()
-        triangle_probs = triangle_probs.cpu().numpy()
-        quad_probs = quad_probs.cpu().numpy()
-        quint_probs = quint_probs.cpu().numpy()
-        sext_probs = sext_probs.cpu().numpy()
-        sept_probs = sept_probs.cpu().numpy()
+        edge_probs = edge_probs.cpu().numpy() if edge_probs is not None else np.zeros(len(all_2edges))
+        triangle_probs = triangle_probs.cpu().numpy() if triangle_probs is not None else np.zeros(len(all_3edges))
+        quad_probs = quad_probs.cpu().numpy() if quad_probs is not None else np.zeros(len(all_4edges))
+        quint_probs = quint_probs.cpu().numpy() if quint_probs is not None else np.zeros(len(all_5edges))
+        sext_probs = sext_probs.cpu().numpy() if sext_probs is not None else np.zeros(len(all_6edges))
+        sept_probs = sept_probs.cpu().numpy() if sept_probs is not None else np.zeros(len(all_7edges))
 
     # scores used for ROC/AUC (if values are hard 0/1 this still works)
     edge_scores = [abs(edge_probs[idx]) for idx, _ in enumerate(all_2edges)]
@@ -332,29 +437,11 @@ def plot_roc(y_true, y_score, label):
     return fpr, tpr, auc_score
 
 for epoch in range(epochs):
-    # Performance profiling
-    epoch_start = time.time()
-    profile_this_epoch = (epoch == 0 or epoch % 500 == 0)
-    
-    t_start = time.time()
     optimizer.zero_grad()
-    t_zero_grad = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()
     x_pred = model.forward(t_data)
-    t_forward = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()
     physics_loss = model.physics_loss(t_data)
-    t_physics = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()
     data_loss = torch.mean((x_pred - x_data)**2)
-    t_data_loss = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()
     sparsity_loss, sparsity_info = model.sparsity_regularization()
-    t_sparsity = time.time() - t_start if profile_this_epoch else 0
     
     if adaptive_weights and epoch > 500:
         sparsity_weight = max(0.1, 1.0 * (0.99 ** (epoch - 500)))
@@ -380,27 +467,13 @@ for epoch in range(epochs):
         if hasattr(model, 'temperature'):
             model.temperature = max(0.5, 1.0 * (0.995 ** ((epoch - stage2_epochs) // 100)))
     
-    t_start = time.time()       
     total_loss = physics_weight * physics_loss + data_weight * data_loss + sparsity_weight * sparsity_loss
-    t_loss_calc = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()       
     total_loss.backward()
-    t_backward = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    t_clip = time.time() - t_start if profile_this_epoch else 0
-    
-    t_start = time.time()   
     optimizer.step()
-    t_optim_step = time.time() - t_start if profile_this_epoch else 0
-    
     scheduler.step()
     losses.append(total_loss.item())
     sparsity_stats.append(sparsity_info)
-    
-    epoch_time = time.time() - epoch_start
         
     if epoch % 500 == 0:
         print(f"\n{'='*80}")
@@ -415,19 +488,6 @@ for epoch in range(epochs):
             f"  L1 sexts: {sparsity_info['l1_sexts']:.2f},"
             f"  L1 septs: {sparsity_info['l1_septs']:.2f}"
         )
-        
-        # Performance breakdown
-        print(f"\n  Performance Breakdown (Total: {epoch_time:.3f}s):")
-        print(f"    Zero grad:      {t_zero_grad:.4f}s ({t_zero_grad/epoch_time*100:.1f}%)")
-        print(f"    Forward pass:   {t_forward:.4f}s ({t_forward/epoch_time*100:.1f}%)")
-        print(f"    Physics loss:   {t_physics:.4f}s ({t_physics/epoch_time*100:.1f}%)")
-        print(f"    Data loss:      {t_data_loss:.4f}s ({t_data_loss/epoch_time*100:.1f}%)")
-        print(f"    Sparsity loss:  {t_sparsity:.4f}s ({t_sparsity/epoch_time*100:.1f}%)")
-        print(f"    Loss calc:      {t_loss_calc:.4f}s ({t_loss_calc/epoch_time*100:.1f}%)")
-        print(f"    Backward pass:  {t_backward:.4f}s ({t_backward/epoch_time*100:.1f}%)")
-        print(f"    Grad clip:      {t_clip:.4f}s ({t_clip/epoch_time*100:.1f}%)")
-        print(f"    Optimizer step: {t_optim_step:.4f}s ({t_optim_step/epoch_time*100:.1f}%)")
-        print(f"{'='*80}\n")
         
         # Plot NN predicted trajectories
         with torch.no_grad():
@@ -465,13 +525,27 @@ for epoch in range(epochs):
                 results_dir=results_dir,
                 epoch=epoch,
             )
-        auc_2 = compute_auc(y_true_2, y_score_2)
-        auc_3 = compute_auc(y_true_3, y_score_3)
-        auc_4 = compute_auc(y_true_4, y_score_4)
-        auc_5 = compute_auc(y_true_5, y_score_5)
-        auc_6 = compute_auc(y_true_6, y_score_6)
-        auc_7 = compute_auc(y_true_7, y_score_7)
-        print(f"  AUC (2-edges): {auc_2:.4f}, AUC (3-edges): {auc_3:.4f}, AUC (4-edges): {auc_4:.4f}, AUC (5-edges): {auc_5:.4f}, AUC (6-edges): {auc_6:.4f}, AUC (7-edges): {auc_7:.4f}")
+        # Only compute and display AUC for orders <= max_order
+        auc_str = ""
+        if max_order >= 2:
+            auc_2 = compute_auc(y_true_2, y_score_2)
+            auc_str = f"  AUC (2-edges): {auc_2:.4f}"
+        if max_order >= 3:
+            auc_3 = compute_auc(y_true_3, y_score_3)
+            auc_str += f", AUC (3-edges): {auc_3:.4f}"
+        if max_order >= 4:
+            auc_4 = compute_auc(y_true_4, y_score_4)
+            auc_str += f", AUC (4-edges): {auc_4:.4f}"
+        if max_order >= 5:
+            auc_5 = compute_auc(y_true_5, y_score_5)
+            auc_str += f", AUC (5-edges): {auc_5:.4f}"
+        if max_order >= 6:
+            auc_6 = compute_auc(y_true_6, y_score_6)
+            auc_str += f", AUC (6-edges): {auc_6:.4f}"
+        if max_order >= 7:
+            auc_7 = compute_auc(y_true_7, y_score_7)
+            auc_str += f", AUC (7-edges): {auc_7:.4f}"
+        print(auc_str)
 
 y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7 = \
     evaluate_edges_triangles(
@@ -485,16 +559,40 @@ y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score
         results_dir=results_dir,
         epoch='final',
     )
-y_true_total = np.concatenate([y_true_2, y_true_3, y_true_4, y_true_5, y_true_6, y_true_7])
-y_score_total = np.concatenate([y_score_2, y_score_3, y_score_4, y_score_5, y_score_6, y_score_7])   
+
+# Only plot ROC curves for orders <= max_order
+y_true_list = []
+y_score_list = []
 plt.figure(figsize=(8, 6))
-plot_roc(y_true_2, y_score_2, 'Pairwise')
-plot_roc(y_true_3, y_score_3, 'Third-order')
-plot_roc(y_true_4, y_score_4, 'Fourth-order')
-plot_roc(y_true_5, y_score_5, 'Fifth-order')
-plot_roc(y_true_6, y_score_6, 'Sixth-order')
-plot_roc(y_true_7, y_score_7, 'Seventh-order')
-plot_roc(y_true_total, y_score_total, label='All') 
+if max_order >= 2:
+    plot_roc(y_true_2, y_score_2, 'Pairwise')
+    y_true_list.append(y_true_2)
+    y_score_list.append(y_score_2)
+if max_order >= 3:
+    plot_roc(y_true_3, y_score_3, 'Third-order')
+    y_true_list.append(y_true_3)
+    y_score_list.append(y_score_3)
+if max_order >= 4:
+    plot_roc(y_true_4, y_score_4, 'Fourth-order')
+    y_true_list.append(y_true_4)
+    y_score_list.append(y_score_4)
+if max_order >= 5:
+    plot_roc(y_true_5, y_score_5, 'Fifth-order')
+    y_true_list.append(y_true_5)
+    y_score_list.append(y_score_5)
+if max_order >= 6:
+    plot_roc(y_true_6, y_score_6, 'Sixth-order')
+    y_true_list.append(y_true_6)
+    y_score_list.append(y_score_6)
+if max_order >= 7:
+    plot_roc(y_true_7, y_score_7, 'Seventh-order')
+    y_true_list.append(y_true_7)
+    y_score_list.append(y_score_7)
+
+if len(y_true_list) > 0:
+    y_true_total = np.concatenate(y_true_list)
+    y_score_total = np.concatenate(y_score_list)
+    plot_roc(y_true_total, y_score_total, label='All') 
 plt.plot([0, 1], [0, 1], 'k--', label='Random Guess')
 plt.xlabel('False Positive Rate',fontsize=16)
 plt.ylabel('True Positive Rate',fontsize=16)
