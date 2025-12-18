@@ -14,6 +14,7 @@ from datetime import datetime
 import json
 import pickle
 import networkx as nx
+import time
 
 def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList):
     m1 = len(x)
@@ -108,13 +109,14 @@ def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, Se
     dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
     return dxdt
 
-N = 8
-EdgeList = np.array([[1, 2],[2, 3],[3, 4],[5, 6],[6, 7],[7, 8]])
-TriangleList = np.array([[1, 2, 3],[2, 4, 5],[5, 6, 7],[6, 7, 8]])
-QuadList = np.array([[1, 2, 3, 4], [5, 6, 7, 8]])
-QuintList = np.array([[1, 2, 3, 4, 5], [4, 5, 6, 7, 8]])
-SextList = np.array([[1, 2, 3, 4, 5, 6]])
-SeptList = np.array([[3, 4, 5, 6, 7, 8, 1]])
+N = 16
+# Sparse hyperedge configuration for 16 nodes
+EdgeList = np.array([[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12], [13, 14]])
+TriangleList = np.array([[1, 2, 3], [5, 6, 7], [10, 11, 12]])
+QuadList = np.array([[1, 2, 3, 4], [13, 14, 15, 16]])
+QuintList = np.array([[5, 6, 7, 8, 9]])
+SextList = np.array([[9, 10, 11, 12, 13, 14]])
+SeptList = np.array([[1, 4, 7, 10, 13, 15, 16]])
 
 all_2edges = list(combinations(range(1, N+1), 2))
 all_3edges = list(combinations(range(1, N+1), 3))
@@ -130,8 +132,8 @@ true_5edges = set(tuple(sorted(quint)) for quint in QuintList)
 true_6edges = set(tuple(sorted(sext)) for sext in SextList)
 true_7edges = set(tuple(sorted(sept)) for sept in SeptList)
 
-M = 300              # Increase time steps (was 150)
-tmax = 20            # Extend time range (was 20)
+M = 300
+tmax = 20
 dt = tmax / M
 t_eval = np.linspace(0, tmax, M+1)
 t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1) 
@@ -144,9 +146,12 @@ dxdt = np.array([roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList, QuadList, 
 x_data = torch.tensor(X, dtype=torch.float64) 
 architectures = [("ResNet", True, False), ("Attention", False, True)]
 
-plt.figure(figsize=(12, 8))
+# Calculate flexible grid size
+n_cols = 4
+n_rows = int(np.ceil(N / n_cols))
+plt.figure(figsize=(4*n_cols, 3*n_rows))
 for i in range(N):
-    plt.subplot(3, 3, i+1)
+    plt.subplot(n_rows, n_cols, i+1)
     plt.plot(t_eval, X[:, i], 'b-', label=f'x_{i+1}')
     plt.plot(t_eval, X[:, i+N], 'r-', label=f'y_{i+1}')
     plt.plot(t_eval, X[:, i+2*N], 'g-', label=f'z_{i+1}')
@@ -224,11 +229,11 @@ def _save_true_hyperedge_figures(
 _save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges, true_6edges, true_7edges)
 arch_name, use_resnet, use_attention = architectures[0]
 model = HyperPINNTopology(N=N, output_dim=3*N, use_resnet=use_resnet, use_attention=use_attention)
-model.initialize_from_ground_truth(
-    true_2edges, true_3edges, true_4edges,
-    true_5edges, true_6edges, true_7edges,
-    remove_edges=None, init_strength=0.5
-)
+# model.initialize_from_ground_truth(
+#     true_2edges, true_3edges, true_4edges,
+#     true_5edges, true_6edges, true_7edges,
+#     remove_edges=None, init_strength=0.5
+# )
 
 model.lambda_l1_edges = 0.03      
 model.lambda_l1_triangles = 0.05   
@@ -331,11 +336,30 @@ def plot_roc(y_true, y_score, label):
     return fpr, tpr, auc_score
 
 for epoch in range(epochs):
+    # Performance profiling
+    epoch_start = time.time()
+    profile_this_epoch = (epoch == 0 or epoch % 500 == 0)
+    
+    t_start = time.time()
     optimizer.zero_grad()
+    t_zero_grad = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()
     x_pred = model.forward(t_data)
+    t_forward = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()
     physics_loss = model.physics_loss(t_data)
+    t_physics = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()
     data_loss = torch.mean((x_pred - x_data)**2)
+    t_data_loss = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()
     sparsity_loss, sparsity_info = model.sparsity_regularization()
+    t_sparsity = time.time() - t_start if profile_this_epoch else 0
+    
     if adaptive_weights and epoch > 500:
         sparsity_weight = max(0.1, 1.0 * (0.99 ** (epoch - 500)))
     else:
@@ -359,16 +383,31 @@ for epoch in range(epochs):
         sparsity_weight = 0.01 * progress  
         if hasattr(model, 'temperature'):
             model.temperature = max(0.5, 1.0 * (0.995 ** ((epoch - stage2_epochs) // 100)))
-           
-    total_loss = physics_weight * physics_loss + data_weight * data_loss + sparsity_weight * sparsity_loss       
-    total_loss.backward() 
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)   
+    
+    t_start = time.time()       
+    total_loss = physics_weight * physics_loss + data_weight * data_loss + sparsity_weight * sparsity_loss
+    t_loss_calc = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()       
+    total_loss.backward()
+    t_backward = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    t_clip = time.time() - t_start if profile_this_epoch else 0
+    
+    t_start = time.time()   
     optimizer.step()
+    t_optim_step = time.time() - t_start if profile_this_epoch else 0
+    
     scheduler.step()
     losses.append(total_loss.item())
     sparsity_stats.append(sparsity_info)
+    
+    epoch_time = time.time() - epoch_start
         
     if epoch % 500 == 0:
+        print(f"\n{'='*80}")
         print(f"Epoch {epoch}, Total Loss: {total_loss.item():.6f}")
         print(f"  Physics: {physics_loss.item():.6f}, Data: {data_loss.item():.6f}")
         print(f"  Sparsity: {sparsity_loss.item():.6f}")
@@ -381,13 +420,26 @@ for epoch in range(epochs):
             f"  L1 septs: {sparsity_info['l1_septs']:.2f}"
         )
         
+        # Performance breakdown
+        print(f"\n  Performance Breakdown (Total: {epoch_time:.3f}s):")
+        print(f"    Zero grad:      {t_zero_grad:.4f}s ({t_zero_grad/epoch_time*100:.1f}%)")
+        print(f"    Forward pass:   {t_forward:.4f}s ({t_forward/epoch_time*100:.1f}%)")
+        print(f"    Physics loss:   {t_physics:.4f}s ({t_physics/epoch_time*100:.1f}%)")
+        print(f"    Data loss:      {t_data_loss:.4f}s ({t_data_loss/epoch_time*100:.1f}%)")
+        print(f"    Sparsity loss:  {t_sparsity:.4f}s ({t_sparsity/epoch_time*100:.1f}%)")
+        print(f"    Loss calc:      {t_loss_calc:.4f}s ({t_loss_calc/epoch_time*100:.1f}%)")
+        print(f"    Backward pass:  {t_backward:.4f}s ({t_backward/epoch_time*100:.1f}%)")
+        print(f"    Grad clip:      {t_clip:.4f}s ({t_clip/epoch_time*100:.1f}%)")
+        print(f"    Optimizer step: {t_optim_step:.4f}s ({t_optim_step/epoch_time*100:.1f}%)")
+        print(f"{'='*80}\n")
+        
         # Plot NN predicted trajectories
         with torch.no_grad():
             X_pred = model.forward(t_data).cpu().numpy()
         
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(4*n_cols, 3*n_rows))
         for i in range(N):
-            plt.subplot(3, 3, i+1)
+            plt.subplot(n_rows, n_cols, i+1)
             # True data (solid lines)
             plt.plot(t_eval, X[:, i], 'b-', label=f'True x_{i+1}', linewidth=1.5)
             plt.plot(t_eval, X[:, i+N], 'r-', label=f'True y_{i+1}', linewidth=1.5)

@@ -1,15 +1,3 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-results/
 *.png
-*.jpg
-*.jpeg
-*.gif
+__pycache__/
+*.txt
