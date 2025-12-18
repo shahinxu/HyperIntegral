@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch import optim as optim
-import numpy as np
 from itertools import combinations
 
 class ResidualBlock(nn.Module):
