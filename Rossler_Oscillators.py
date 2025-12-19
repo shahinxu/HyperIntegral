@@ -104,15 +104,15 @@ def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, Se
     dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
     return dxdt
 
-N = 16
-max_order = 2  # Set the maximum order for training
-gpu_id = 1
+N = 14
+max_order = 7
+gpu_id = 3
 
 def get_hyperedge_config(N):
     configs = {
         8: {
-            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7]],
-            'triangles': [[1, 2, 3], [5, 6, 7]],
+            'edges': [[1, 2],[2, 3],[3, 4],[5, 6],[6, 7],[7, 8]],
+            'triangles': [[1, 2, 3],[2, 4, 5],[5, 6, 7],[6, 7, 8]],
             'quads': [[1, 2, 3, 4]],
             'quints': [[4, 5, 6, 7, 8]],
             'sexts': [[1, 2, 3, 4, 5, 6]],
@@ -388,7 +388,7 @@ def evaluate_edges_triangles(
     epoch=None,
 ):
     with torch.no_grad():
-        edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = model.get_sparse_weights(use_concrete=False, hard=True)
+        edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = model.get_sparse_weights(use_concrete=False, hard=False)
         edge_probs = edge_probs.cpu().numpy() if edge_probs is not None else np.zeros(len(all_2edges))
         triangle_probs = triangle_probs.cpu().numpy() if triangle_probs is not None else np.zeros(len(all_3edges))
         quad_probs = quad_probs.cpu().numpy() if quad_probs is not None else np.zeros(len(all_4edges))

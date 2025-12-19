@@ -48,22 +48,22 @@ class HyperPINNTopology(nn.Module):
         
         if max_order >= 2:
             num_edges = N * (N-1)//2
-            self.edge_weights = nn.Parameter(torch.randn(num_edges) * 0.1)
+            self.edge_weights = nn.Parameter(torch.randn(num_edges) * 0.1 - 2)
         if max_order >= 3:
             num_triangles = N * (N-1) * (N-2) // 6
-            self.triangle_weights = nn.Parameter(torch.randn(num_triangles) * 0.1)
+            self.triangle_weights = nn.Parameter(torch.randn(num_triangles) * 0.1 - 3)
         if max_order >= 4:
             num_quads = N * (N-1) * (N-2) * (N-3) // 24
-            self.quad_weights = nn.Parameter(torch.randn(num_quads) * 0.1)
+            self.quad_weights = nn.Parameter(torch.randn(num_quads) * 0.1 - 4)
         if max_order >= 5:
             num_quints = N * (N-1) * (N-2) * (N-3) * (N-4) // 120
-            self.quint_weights = nn.Parameter(torch.randn(num_quints) * 0.1)
+            self.quint_weights = nn.Parameter(torch.randn(num_quints) * 0.1 - 4)
         if max_order >= 6:
             num_sexts = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) // 720
-            self.sext_weights = nn.Parameter(torch.randn(num_sexts) * 0.1)
+            self.sext_weights = nn.Parameter(torch.randn(num_sexts) * 0.1 - 4)
         if max_order >= 7:
             num_septs = N * (N-1) * (N-2) * (N-3) * (N-4) * (N-5) * (N-6) // 5040
-            self.sept_weights = nn.Parameter(torch.randn(num_septs) * 0.1)
+            self.sept_weights = nn.Parameter(torch.randn(num_septs) * 0.1 - 4)
         
         self.lambda_l1_edges = 0.01      
         self.lambda_l1_triangles = 0.01 
@@ -331,7 +331,7 @@ class HyperPINNTopology(nn.Module):
         coup_sexts = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         coup_septs = torch.zeros((B, N), device=device, dtype=x_pred.dtype)
         edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = \
-            self.get_sparse_weights(use_concrete=False, hard=True)
+            self.get_sparse_weights(use_concrete=False, hard=False)
 
         if self.max_order >= 2:
             edge_idx = self.edge_indices_t.to(x_old.device)
