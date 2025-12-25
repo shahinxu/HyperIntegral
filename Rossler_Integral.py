@@ -514,8 +514,6 @@ def generate_training_data(N, edge_config):
     t_eval = np.linspace(0, 150, 301)
     sol = solve_ivp(roessler_hoi, t_span, x0, t_eval=t_eval, method='RK45', rtol=1e-10, atol=1e-12)
     
-    # Convert data from [3N] to [N, 3] format
-    # sol.y.T is [T, 3N]
     x_data_flat = sol.y.T  # [T, 3N]
     T = x_data_flat.shape[0]
     x_data = np.zeros((T, N, 3))
@@ -573,7 +571,30 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
     
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]  # [T-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
-    A = torch.randn(n_hyperedges, 1, device=device, requires_grad=True)
+    
+    A = torch.randn(n_hyperedges, 1, device=device)
+    A_idx = 0
+    n_edges = len(all_possible_edges['edges'])
+    n_triangles = len(all_possible_edges['triangles'])
+    n_quads = len(all_possible_edges['quads'])
+    n_quints = len(all_possible_edges['quints'])
+    n_sexts = len(all_possible_edges['sexts'])
+    n_septs = len(all_possible_edges['septs'])
+    
+    # 2-edges: bias = -2
+    if n_edges > 0:
+        A[A_idx:A_idx+n_edges] -= 2.0
+        A_idx += n_edges
+    # 3-edges: bias = -3
+    if n_triangles > 0:
+        A[A_idx:A_idx+n_triangles] -= 3.0
+        A_idx += n_triangles
+    # 4/5/6/7-edges: bias = -4
+    remaining = n_quads + n_quints + n_sexts + n_septs
+    if remaining > 0:
+        A[A_idx:A_idx+remaining] -= 4.0
+    
+    A.requires_grad_(True)
     
     optimizer = optim.Adam([A], lr=lr)
     
@@ -594,9 +615,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
             f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3]
             Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3, n_hyperedges]
             dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
-            
-            # Compute integral - Using einsum for one-shot computation
-            # f integral: sum over time with dt weighting
             integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, 3]
             Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, 3]
             integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, 3]
@@ -607,11 +625,19 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
         
         total_loss = torch.mean(torch.stack(losses))
         
-        # Backpropagation
+        # if epoch >= n_epochs - 10000:
+        #     progress = (epoch - (n_epochs - 10000)) / 10000  # 0 to 1
+        #     # sparsity_weight = 0.00001 * progress
+        #     sparsity_weight = 0
+        #     l1_loss = sparsity_weight * torch.sum(torch.abs(A))
+        #     total_loss = total_loss + l1_loss
+        
         total_loss.backward()
         optimizer.step()
         
-        # Update progress bar info
+        with torch.no_grad():
+            A.clamp_(-2.0, 2.0)
+        
         A_np = A.detach().cpu().numpy().flatten()
         pbar.set_postfix({
             'loss': f'{total_loss.item():.6f}',
@@ -620,7 +646,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
             'A_mean': f'{A_np.mean():.3f}'
         })
         
-        # Output AUC results every 500 epochs
         if (epoch + 1) % 500 == 0:
             print(f"\n\n{'='*60}")
             print(f"Epoch {epoch+1}/{n_epochs} - AUC Evaluation")
@@ -665,14 +690,11 @@ if __name__ == "__main__":
     A_learned, edge_config = train_integral_model(
         N=N, 
         max_order=max_order, 
-        n_epochs=5000, 
+        n_epochs=40000, 
         lr=0.01, 
-        batch_size=16,
+        batch_size=32,
         gpu_id=gpu_id
     )
-    
-    print("\nLearned hyperedge weights A:")
-    print(A_learned.flatten())
     
     print("\nComputing AUC scores...")
     auc_scores, roc_data = compute_auc_scores(A_learned, edge_config, N, max_order)
