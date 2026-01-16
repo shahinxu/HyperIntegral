@@ -17,8 +17,6 @@ include("run_this_rossler.jl")
 # Modified main function that accepts M as parameter
 function run_single_experiment(M::Int, N::Int, tmax::Float64, max_order::Int)
     EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList = get_hyperedge_config(N)
-    
-    # Random initial conditions (matching Python)
     x0 = rand(3 * N) .* 2 .- 1
     
     dt = tmax / M

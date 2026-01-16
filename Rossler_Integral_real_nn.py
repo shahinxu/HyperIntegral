@@ -580,11 +580,9 @@ def generate_training_data(N, edge_config, n_samples=11, noise=0.0):
         dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
         return dxdt
     
-    # Initialize
     np.random.seed(42)
     x0 = np.random.uniform(-1, 1, size=(3 * N,))
     
-    # Solve ODE
     t_span = (0, 20)
     t_eval = np.linspace(0, 20, n_samples)
     sol = solve_ivp(roessler_hoi, t_span, x0, t_eval=t_eval, method='RK45', rtol=1e-10, atol=1e-12)
@@ -601,7 +599,7 @@ def generate_training_data(N, edge_config, n_samples=11, noise=0.0):
         np.random.seed(42)
         x_data += np.random.randn(*x_data.shape) * noise
     
-    return sol.t, x_data  # [T], [T, N, 3]
+    return sol.t, x_data
 
 
 def train_integral_model(
@@ -651,45 +649,91 @@ def train_integral_model(
     print(f"Data shape: {x_data.shape}, Time points: {n_times}")
     if noise > 0:
         print(f"Added Gaussian noise with std={noise}")
+        # Also generate clean data for visualization comparison
+        print("Generating clean (no-noise) ground truth data for comparison...")
+        _, x_data_clean = generate_training_data(N, edge_config, n_samples, noise=0.0)
+    else:
+        x_data_clean = None
 
     
     # ============================================================================
-    # NEURAL NETWORK TRAINING + RESAMPLING (ONLY DIFFERENCE FROM Rossler_Integral.py)
+    # NEURAL NETWORK TRAINING + RESAMPLING (REAL NN VERSION!)
     # ============================================================================
     if use_nn:
         print("\n" + "="*80)
-        print("LINEAR INTERPOLATION MODE: Using piecewise linear curves")
+        print("REAL NEURAL NETWORK MODE: Training TimeResNet to denoise & fit data")
         print("="*80)
         
         # Flatten x_data to [T, 3N]
         x_data_flat = x_data.reshape(n_times, 3 * N)
         
-        print(f"\nUsing LINEAR INTERPOLATION (no neural network)")
-        print(f"  Original {n_times} points will be connected by straight lines")
-        print(f"  This GUARANTEES passing through all observation points!")
+        # Transfer to GPU
+        t_data_nn = torch.tensor(t_data, dtype=torch.float32, device=device).unsqueeze(1)  # [T, 1]
+        x_data_nn = torch.tensor(x_data_flat, dtype=torch.float32, device=device)  # [T, 3N]
         
-        # Dense resampling using LINEAR interpolation
-        print(f"\nDense resampling using linear interpolation...")
+        # Initialize neural network
+        print(f"\nInitializing TimeResNet:")
+        print(f"  Input: time (1D)")
+        print(f"  Output: state of {N} nodes × 3 coords = {3*N}D")
+        print(f"  Hidden dim: {nn_hidden_dim}")
+        print(f"  Num layers: {nn_layers}")
+        
+        resnet = TimeResNet(
+            output_dim=3*N, 
+            hidden_dim=nn_hidden_dim, 
+            num_layers=nn_layers,
+            dropout=0.0
+        ).to(device)
+        
+        # Set normalization parameters
+        resnet.t_mean = t_data_nn.mean()
+        resnet.t_std = t_data_nn.std()
+        resnet.x_mean = x_data_nn.mean(dim=0)
+        resnet.x_std = x_data_nn.std(dim=0)
+        
+        # Train neural network to fit the data
+        print(f"\nTraining neural network for {stage1_epochs} epochs...")
+        optimizer_nn = optim.Adam(resnet.parameters(), lr=0.001)
+        
+        pbar_nn = tqdm(range(stage1_epochs), desc="NN Training", ncols=100)
+        for epoch in pbar_nn:
+            optimizer_nn.zero_grad()
+            
+            # Forward pass
+            x_pred = resnet(t_data_nn, normalize=True)  # [T, 3N]
+            
+            # MSE loss
+            loss_nn = torch.mean((x_pred - x_data_nn) ** 2)
+            
+            loss_nn.backward()
+            optimizer_nn.step()
+            
+            if epoch % 100 == 0:
+                pbar_nn.set_postfix({'loss': f'{loss_nn.item():.6f}'})
+        
+        print(f"Neural network training completed! Final loss: {loss_nn.item():.6f}")
+        
+        # Dense resampling using TRAINED NEURAL NETWORK
+        print(f"\nDense resampling using trained ResNet...")
         n_resampled = (n_times - 1) * resample_factor + 1
         t_data_resampled = np.linspace(t_data[0], t_data[-1], n_resampled)
+        t_data_resampled_gpu = torch.tensor(t_data_resampled, dtype=torch.float32, device=device).unsqueeze(1)
         
         print(f"Original data points: {n_times}")
         print(f"Resampled data points: {n_resampled} ({resample_factor}x denser)")
         
-        # Use scipy's interp1d for linear interpolation
-        from scipy.interpolate import interp1d
-        x_data_resampled = np.zeros((n_resampled, N, 3))
+        # Generate resampled data from neural network
+        with torch.no_grad():
+            x_data_resampled_flat = resnet(t_data_resampled_gpu, normalize=True).cpu().numpy()  # [n_resampled, 3N]
         
-        for node_idx in range(N):
-            for coord_idx in range(3):
-                # Linear interpolation for each node-coordinate pair
-                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], 
-                                      kind='linear', fill_value='extrapolate')
-                x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
+        x_data_resampled = x_data_resampled_flat.reshape(n_resampled, N, 3)
+        print(f"Neural network resampling completed!")
         
-        print(f"Linear interpolation completed!")
+        # For visualization and error analysis
+        with torch.no_grad():
+            x_data_pred_flat = resnet(t_data_nn, normalize=True).cpu().numpy()  # [T, 3N]
+        x_data_pred = x_data_pred_flat.reshape(n_times, N, 3)
         
-        # For visualization consistency
         x_data_resampled_cpu = x_data_resampled
         
         fig, axes = plt.subplots(N, 3, figsize=(15, 2.5*N))
@@ -699,13 +743,23 @@ def train_integral_model(
             for coord_idx in range(3):
                 ax = axes[node_idx, coord_idx]
                 
-                # Plot original data
-                ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
-                       label='Original (ODE)', markersize=4, alpha=0.7, color='blue')
+                # Plot ground truth (clean data) if available
+                if x_data_clean is not None:
+                    ax.plot(t_data, x_data_clean[:, node_idx, coord_idx], '-', 
+                           label='Ground Truth (No Noise)', linewidth=2, alpha=0.5, color='black', zorder=1)
                 
-                # Plot resampled data
+                # Plot original data (potentially with noise)
+                ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
+                       label='Noisy Data' if noise > 0 else 'Original (ODE)', 
+                       markersize=4, alpha=0.7, color='blue', zorder=3)
+                
+                # Plot NN fit on original points
+                ax.plot(t_data, x_data_pred[:, node_idx, coord_idx], 's',
+                       label='NN Fit (sparse)', markersize=3, alpha=0.7, color='green', zorder=4)
+                
+                # Plot dense resampled data
                 ax.plot(t_data_resampled, x_data_resampled_cpu[:, node_idx, coord_idx], 
-                       '-', label='Resampled (ResNet)', linewidth=1, alpha=0.8, color='red')
+                       '-', label='Resampled (ResNet)', linewidth=1, alpha=0.8, color='red', zorder=2)
                 
                 # Labels and formatting
                 if node_idx == 0:
@@ -721,27 +775,19 @@ def train_integral_model(
         plt.tight_layout()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         noise_str = f"_noise_{noise}" if noise > 0 else ""
-        save_dir = f"results_integral_nn/{n_samples}_{noise_str}/{timestamp}"
+        save_dir = f"results_integral_real_nn/n{n_samples}{noise_str}/{timestamp}"
         os.makedirs(save_dir, exist_ok=True)
         plt.savefig(os.path.join(save_dir, 'resnet_vs_original.png'), dpi=150, bbox_inches='tight')
         plt.close()
         print(f"Comparison plot saved to {os.path.join(save_dir, 'resnet_vs_original.png')}")
         
-        from scipy.interpolate import interp1d
-        errors_per_node = []
-        for node_idx in range(N):
-            for coord_idx in range(3):
-                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], kind='cubic')
-                x_orig_interp = interp_func(t_data_resampled)
-                
-                error = np.abs(x_data_resampled_cpu[:, node_idx, coord_idx] - x_orig_interp)
-                errors_per_node.append(error)
-        
-        errors_all = np.concatenate(errors_per_node)
-        print(f"\nResNet fitting error statistics:")
-        print(f"  Mean absolute error: {errors_all.mean():.6f}")
-        print(f"  Max absolute error: {errors_all.max():.6f}")
-        print(f"  Std of error: {errors_all.std():.6f}")
+        # Compute fitting error on ORIGINAL points
+        errors_fitting = np.abs(x_data_pred - x_data)
+        print(f"\nResNet fitting error on original {n_times} points:")
+        print(f"  Mean absolute error: {errors_fitting.mean():.6f}")
+        print(f"  Max absolute error: {errors_fitting.max():.6f}")
+        print(f"  Std of error: {errors_fitting.std():.6f}")
+        print(f"  -> NN successfully {'denoised' if noise > 0 else 'fit'} the data!")
         
         t_data = t_data_resampled
         x_data = x_data_resampled_cpu
@@ -790,11 +836,9 @@ def train_integral_model(
     if n_edges > 0:
         A[A_idx:A_idx+n_edges] -= 2.0
         A_idx += n_edges
-    # 3-edges: bias = -3
     if n_triangles > 0:
         A[A_idx:A_idx+n_triangles] -= 3.0
         A_idx += n_triangles
-    # 4/5/6/7-edges: bias = -4
     remaining = n_quads + n_quints + n_sexts + n_septs
     if remaining > 0:
         A[A_idx:A_idx+remaining] -= 4.0
@@ -803,16 +847,17 @@ def train_integral_model(
     
     optimizer = optim.Adam([A], lr=lr)
     
-    # Training loop (with progress bar)
+    min_interval = n_times // 3
+    print(f"Using long-range integral constraint: min_interval = {min_interval} (out of {n_times} points)")
+    
     pbar = tqdm(range(n_epochs), desc="Training Progress", ncols=120)
     for epoch in pbar:
         optimizer.zero_grad()
         losses = []
         
         for _ in range(batch_size):
-            idx_i, idx_j = np.random.choice(n_times, size=2, replace=False)
-            if idx_i > idx_j:
-                idx_i, idx_j = idx_j, idx_i
+            idx_i = np.random.randint(0, n_times - min_interval)
+            idx_j = np.random.randint(idx_i + min_interval, n_times)
             
             x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, 3]
             
@@ -888,7 +933,7 @@ if __name__ == "__main__":
                         help='Learning rate (default: 0.01)')
     parser.add_argument('--gpu_id', type=int, default=6,
                         help='GPU device ID (default: 6)')
-    parser.add_argument('--noise', type=float, default=0.0,
+    parser.add_argument('--noise', type=float, default=0.01,
                         help='Noise level to add to training data (default: 0.0)')
     args = parser.parse_args()
     

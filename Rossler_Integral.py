@@ -22,6 +22,7 @@ from sklearn.metrics import roc_curve, auc
 import os
 from datetime import datetime
 from tqdm import tqdm
+import argparse
 
 def roessler_dynamics(x, N):
     """
@@ -689,10 +690,14 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Rossler Integral Model')
+    parser.add_argument('--noise', type=float, default=0.0, help='Noise level (default: 0.0)')
+    parser.add_argument('--gpu_id', type=int, default=0, help='GPU device ID (default: 0)')
+    parser.add_argument('--output_dir', type=str, default=None, help='Output directory name')
+    args = parser.parse_args()
+    
     N = 8
     max_order = 7
-    gpu_id = 0
-    noise = 0
     
     A_learned, edge_config = train_integral_model(
         N=N, 
@@ -700,8 +705,8 @@ if __name__ == "__main__":
         n_epochs=20000, 
         lr=0.01, 
         batch_size=32,
-        gpu_id=gpu_id,
-        noise=noise
+        gpu_id=args.gpu_id,
+        noise=args.noise
     )
     
     print("\nComputing AUC scores...")
@@ -715,7 +720,10 @@ if __name__ == "__main__":
             print(f"  {order_label}: N/A (no positive/negative samples)")
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = f"results/integral_{timestamp}"
+    if args.output_dir:
+        save_dir = f"{args.output_dir}/{timestamp}"
+    else:
+        save_dir = f"results/integral_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
     
     np.save(f"{save_dir}/A_learned.npy", A_learned)

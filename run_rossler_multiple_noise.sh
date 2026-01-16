@@ -1,21 +1,14 @@
-#!/bin/bash
-
-# Bash script to run Rossler_Oscillators.py multiple times sequentially
-# Usage: ./run_rossler_multiple.sh [num_runs]
-
-# Default parameters
 M=300
 tmax=20
 N=8
 max_order=7
-gpu_id=1
+gpu_id=5
 noise=0.05
 
-# Number of runs (default to 10 if not specified)
-NUM_RUNS=${1:-10}
+NUM_RUNS=${1:-5}
 
 # Create logs directory
-LOGS_DIR="logs_$(date +%Y%m%d_%H%M%S)"
+LOGS_DIR="logs_$noise"
 mkdir -p $LOGS_DIR
 LOG_FILE="$LOGS_DIR/all_runs.log"
 

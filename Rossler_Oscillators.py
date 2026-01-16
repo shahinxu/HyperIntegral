@@ -246,10 +246,10 @@ dxdt = np.array([roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList, QuadList, 
 x_data = torch.tensor(X, dtype=torch.float64)
 
 if noise > 0:
-    noise_std = noise * torch.std(x_data)
-    noise = torch.randn_like(x_data) * noise_std
-    x_data = x_data + noise
-    print(f"Added {noise*100:.1f}% noise to data (std={noise_std:.6f})")
+    torch.manual_seed(42)
+    noise_tensor = torch.randn_like(x_data) * noise
+    x_data = x_data + noise_tensor
+    print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
 architectures = [
     ("ResNet", True, False, False),
     ("Attention", False, True, False),
@@ -260,11 +260,16 @@ architectures = [
 n_cols = 4
 n_rows = int(np.ceil(N / n_cols))
 plt.figure(figsize=(4*n_cols, 3*n_rows))
+X_plot = x_data.cpu().numpy() if noise > 0 else X
 for i in range(N):
     plt.subplot(n_rows, n_cols, i+1)
-    plt.plot(t_eval, X[:, i], 'b-', label=f'x_{i+1}')
-    plt.plot(t_eval, X[:, i+N], 'r-', label=f'y_{i+1}')
-    plt.plot(t_eval, X[:, i+2*N], 'g-', label=f'z_{i+1}')
+    plt.plot(t_eval, X_plot[:, i], 'b-', label=f'x_{i+1}', alpha=0.7)
+    plt.plot(t_eval, X_plot[:, i+N], 'r-', label=f'y_{i+1}', alpha=0.7)
+    plt.plot(t_eval, X_plot[:, i+2*N], 'g-', label=f'z_{i+1}', alpha=0.7)
+    if noise > 0:
+        plt.plot(t_eval, X[:, i], 'b--', alpha=0.3, linewidth=0.5)
+        plt.plot(t_eval, X[:, i+N], 'r--', alpha=0.3, linewidth=0.5)
+        plt.plot(t_eval, X[:, i+2*N], 'g--', alpha=0.3, linewidth=0.5)
     plt.xlabel('Time')
     plt.ylabel('State')
     plt.title(f'Node {i+1}')
@@ -339,7 +344,7 @@ def _save_true_hyperedge_figures(
 _save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges, true_6edges, true_7edges)
 
 # Setup device
-if gpu_id is not None and torch.cuda.is_available():
+if gpu_id is not None and gpu_id >= 0 and torch.cuda.is_available():
     device = torch.device(f'cuda:{gpu_id}')
     print(f"Using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
 elif torch.cuda.is_available():
@@ -359,11 +364,6 @@ model = HyperPINNTopology(
     max_order=max_order,
 )
 model = model.to(device)
-# model.initialize_from_ground_truth(
-#     true_2edges, true_3edges, true_4edges,
-#     true_5edges, true_6edges, true_7edges,
-#     remove_edges=None, init_strength=0.5
-# )
 
 model.lambda_l1_edges = 0.03      
 model.lambda_l1_triangles = 0.05   
