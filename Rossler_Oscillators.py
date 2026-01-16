@@ -10,6 +10,7 @@ from sklearn.metrics import roc_curve, auc
 import os
 from datetime import datetime
 import networkx as nx
+import argparse
 
 def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList):
     m1 = len(x)
@@ -104,9 +105,20 @@ def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, Se
     dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
     return dxdt
 
-N = 14
-max_order = 7
-gpu_id = 3
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Run Rossler Oscillators with HyperPINN')
+parser.add_argument('--M', type=int, default=300)
+parser.add_argument('--tmax', type=float, default=20)
+parser.add_argument('--N', type=int, default=8)
+parser.add_argument('--max_order', type=int, default=7)
+parser.add_argument('--gpu_id', type=int, default=4)
+parser.add_argument('--noise', type=float, default=0)
+args = parser.parse_args()
+
+N = args.N
+max_order = args.max_order
+gpu_id = args.gpu_id
+noise = args.noise
 
 def get_hyperedge_config(N):
     configs = {
@@ -220,8 +232,8 @@ true_5edges = set(tuple(sorted(quint)) for quint in QuintList)
 true_6edges = set(tuple(sorted(sext)) for sext in SextList)
 true_7edges = set(tuple(sorted(sept)) for sept in SeptList)
 
-M = 300
-tmax = 20
+M = args.M
+tmax = args.tmax
 dt = tmax / M
 t_eval = np.linspace(0, tmax, M+1)
 t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1) 
@@ -231,8 +243,18 @@ X = sol.y.T
 nt = len(t_eval)
 dxdt = np.array([roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList) for i, t in enumerate(sol.t)])
 
-x_data = torch.tensor(X, dtype=torch.float64) 
-architectures = [("ResNet", True, False), ("Attention", False, True)]
+x_data = torch.tensor(X, dtype=torch.float64)
+
+if noise > 0:
+    noise_std = noise * torch.std(x_data)
+    noise = torch.randn_like(x_data) * noise_std
+    x_data = x_data + noise
+    print(f"Added {noise*100:.1f}% noise to data (std={noise_std:.6f})")
+architectures = [
+    ("ResNet", True, False, False),
+    ("Attention", False, True, False),
+    ("Pirate", False, False, True),
+]
 
 # Calculate flexible grid size
 n_cols = 4
@@ -327,8 +349,15 @@ else:
     device = torch.device('cpu')
     print("Using CPU")
 
-arch_name, use_resnet, use_attention = architectures[0]
-model = HyperPINNTopology(N=N, output_dim=3*N, use_resnet=use_resnet, use_attention=use_attention, max_order=max_order)
+arch_name, use_resnet, use_attention, use_pirate = architectures[2]
+model = HyperPINNTopology(
+    N=N,
+    output_dim=3*N,
+    use_resnet=use_resnet,
+    use_attention=use_attention,
+    use_pirate=use_pirate,
+    max_order=max_order,
+)
 model = model.to(device)
 # model.initialize_from_ground_truth(
 #     true_2edges, true_3edges, true_4edges,

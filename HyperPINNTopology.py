@@ -3,6 +3,7 @@ from torch import nn
 from torch import optim as optim
 from itertools import combinations
 
+
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.1):
         super().__init__()
@@ -13,16 +14,48 @@ class ResidualBlock(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim)
-        )  
+        )
+
     def forward(self, x):
         return x + self.net(x)
 
+
+class PirateBlock(nn.Module):
+    def __init__(self, hidden_dim, activation="tanh", nonlinearity_init=0.0):
+        super().__init__()
+        if activation == "tanh":
+            self.activation = nn.Tanh()
+        elif activation.lower() == "gelu":
+            self.activation = nn.GELU()
+        else:
+            raise ValueError(f"Unsupported activation for PirateBlock: {activation}")
+
+        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.alpha = nn.Parameter(torch.tensor(float(nonlinearity_init)))
+
+    def forward(self, x, u, v):
+        identity = x
+
+        h = self.activation(self.fc1(x))
+        h = h * u + (1.0 - h) * v
+
+        h = self.activation(self.fc2(h))
+        h = h * u + (1.0 - h) * v
+
+        h = self.activation(self.fc3(h))
+
+        return self.alpha * h + (1.0 - self.alpha) * identity
+
+
 class HyperPINNTopology(nn.Module):
-    def __init__(self, N, output_dim, hidden_dim=64, num_layers=4, use_resnet=True, use_attention=False, max_order=7):
-        super().__init__() 
+    def __init__(self, N, output_dim, hidden_dim=64, num_layers=8, use_resnet=True, use_attention=False, use_pirate=False, max_order=7):
+        super().__init__()
         self.N = N
         self.use_resnet = use_resnet
         self.use_attention = use_attention
+        self.use_pirate = use_pirate
         self.max_order = max_order
         input_dim = 1
 
@@ -43,6 +76,23 @@ class HyperPINNTopology(nn.Module):
             for _ in range(num_layers - 2):
                 self.res_blocks.append(ResidualBlock(hidden_dim))
             self.output_layer = nn.Linear(hidden_dim, output_dim)
+        elif use_pirate:
+            if use_resnet or use_attention:
+                raise ValueError("Only one of use_resnet, use_attention, use_pirate can be True")
+
+            self.pirate_input = nn.Linear(input_dim, hidden_dim)
+            self.pirate_u = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.Tanh(),
+            )
+            self.pirate_v = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.Tanh(),
+            )
+            self.pirate_blocks = nn.ModuleList(
+                [PirateBlock(hidden_dim=hidden_dim, activation="tanh", nonlinearity_init=0.0) for _ in range(num_layers)]
+            )
+            self.pirate_output = nn.Linear(hidden_dim, output_dim)
         else:
             raise ValueError("Specify one of: use_resnet=True or use_attention=True")
         
@@ -195,6 +245,13 @@ class HyperPINNTopology(nn.Module):
             for block in self.res_blocks:
                 h = block(h)
             return self.output_layer(h)
+        elif self.use_pirate:
+            h = torch.tanh(self.pirate_input(t))
+            u = self.pirate_u(h)
+            v = self.pirate_v(h)
+            for block in self.pirate_blocks:
+                h = block(h, u, v)
+            return self.pirate_output(h)
  
     def concrete_binary_gates(self, logits, temperature=1.0, hard=False):
         uniform = torch.rand_like(logits)

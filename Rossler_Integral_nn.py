@@ -10,10 +10,15 @@ Right side:
   
 Uses rectangular integration (simplest integration method)
 Learnable parameters: A = [N_possible_hyperedge, 1]
+
+DIFFERENCE FROM Rossler_Integral.py:
+  - Trains TimeResNet to fit data first
+  - Resamples densely from nn (10x more points)
+  - Then proceeds with same precomputation approach as original
 """
 
 import torch
-from torch import optim
+from torch import optim, nn
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
@@ -22,13 +27,65 @@ from sklearn.metrics import roc_curve, auc
 import os
 from datetime import datetime
 from tqdm import tqdm
+import argparse
+
+# ============================================================================
+# NEURAL NETWORK COMPONENTS (Same architecture as HyperPINNTopology.py)
+# ============================================================================
+
+class ResidualBlock(nn.Module):
+    """ResidualBlock with LayerNorm and GELU (from HyperPINNTopology.py)"""
+    def __init__(self, hidden_dim, dropout=0.0):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        )
+
+    def forward(self, x):
+        return x + self.net(x)
+
+
+class TimeResNet(nn.Module):
+    """ResNet for time series prediction (EXACTLY same as HyperPINNTopology.py)"""
+    def __init__(self, output_dim, hidden_dim=64, num_layers=8, dropout=0.0):
+        super().__init__()
+        self.input_layer = nn.Linear(1, hidden_dim)
+        self.res_blocks = nn.ModuleList([
+            ResidualBlock(hidden_dim, dropout=dropout) 
+            for _ in range(num_layers - 2)
+        ])
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        
+        # Data normalization parameters (will be set during training)
+        self.register_buffer('t_mean', torch.tensor(0.0))
+        self.register_buffer('t_std', torch.tensor(1.0))
+        self.register_buffer('x_mean', torch.zeros(output_dim))
+        self.register_buffer('x_std', torch.ones(output_dim))
+
+    def forward(self, t, normalize=False):
+        # t: [B, 1]
+        if normalize:
+            t = (t - self.t_mean) / (self.t_std + 1e-8)
+        # IMPORTANT: HyperPINNTopology uses tanh here, not gelu!
+        h = torch.tanh(self.input_layer(t))
+        for block in self.res_blocks:
+            h = block(h)
+        out = self.output_layer(h)
+        if normalize:
+            out = out * self.x_std + self.x_mean
+        return out
+
+
+# ============================================================================
+# IDENTICAL TO Rossler_Integral.py FROM HERE
+# ============================================================================
 
 def roessler_dynamics(x, N):
-    """
-    Rossler dynamics basic equations (without coupling terms) - GPU version
-    x: [N, 3] torch tensor [[x1,y1,z1], [x2,y2,z2], ...]
-    Returns: [N, 3] torch tensor of derivatives
-    """
     ar, br, cr = 0.2, 0.2, 0.7
     
     xold = x[:, 0]  # [N]
@@ -43,12 +100,6 @@ def roessler_dynamics(x, N):
 
 
 def compute_hyperedge_coupling_tensor(x, all_possible_edges, N, device):
-    """
-    Compute coupling tensor for all possible hyperedges - Vectorized GPU version
-    x: [N, 3] torch tensor [[x1,y1,z1], [x2,y2,z2], ...]
-    all_possible_edges: Dictionary containing all possible hyperedge lists (not just true ones)
-    Returns: Φ tensor [N, 3, N_total_hyperedges]
-    """
     xold = x[:, 0]  # [N]
     yold = x[:, 1]  # [N]
     zold = x[:, 2]  # [N]
@@ -56,102 +107,123 @@ def compute_hyperedge_coupling_tensor(x, all_possible_edges, N, device):
     k, kD = 0.4, 0.3
     
     # Count all hyperedges
-    n_edges = len(all_possible_edges['edges'])
-    n_triangles = len(all_possible_edges['triangles'])
-    n_quads = len(all_possible_edges['quads'])
-    n_quints = len(all_possible_edges['quints'])
-    n_sexts = len(all_possible_edges['sexts'])
-    n_septs = len(all_possible_edges['septs'])
+    n_edges = all_possible_edges['edges'].shape[0]
+    n_triangles = all_possible_edges['triangles'].shape[0]
+    n_quads = all_possible_edges['quads'].shape[0]
+    n_quints = all_possible_edges['quints'].shape[0]
+    n_sexts = all_possible_edges['sexts'].shape[0]
+    n_septs = all_possible_edges['septs'].shape[0]
     n_total = n_edges + n_triangles + n_quads + n_quints + n_sexts + n_septs
     
     # Pre-allocate entire tensor
     Phi = torch.zeros((N, 3, n_total), device=device)
     edge_idx = 0
     
-    # 2-edges - Vectorized processing
+    # 2-edges - FULLY Vectorized (no loops!)
     if n_edges > 0:
-        edges_tensor = torch.tensor(all_possible_edges['edges'], device=device) - 1  # [n_edges, 2], 0-indexed
+        edges_tensor = all_possible_edges['edges']  # [n_edges, 2]
         i_indices = edges_tensor[:, 0]  # [n_edges]
         j_indices = edges_tensor[:, 1]  # [n_edges]
         
-        # Get x coordinates of relevant nodes
-        xi = xold[i_indices]  # [n_edges]
-        xj = xold[j_indices]  # [n_edges]
-        
-        # Batch compute coupling
-        for idx, (i, j) in enumerate(zip(i_indices, j_indices)):
-            Phi[i, 0, edge_idx + idx] = k * (xold[j] - xold[i])
-            Phi[j, 0, edge_idx + idx] = k * (xold[i] - xold[j])
+        # Vectorized computation
+        diff = k * (xold[j_indices] - xold[i_indices])  # [n_edges]
+        Phi[i_indices, 0, edge_idx + torch.arange(n_edges, device=device)] = diff
+        Phi[j_indices, 0, edge_idx + torch.arange(n_edges, device=device)] = -diff
         edge_idx += n_edges
     
-    # 3-edges - Vectorized processing
+    # 3-edges - FULLY Vectorized
     if n_triangles > 0:
-        triangles_tensor = torch.tensor(all_possible_edges['triangles'], device=device) - 1  # [n_triangles, 3]
-        for idx, triangle in enumerate(triangles_tensor):
-            i, j, k_idx = triangle[0], triangle[1], triangle[2]
-            xi, xj, xk = xold[i], xold[j], xold[k_idx]
-            
-            Phi[i, 0, edge_idx + idx] = kD * (xj**2 * xk - xi**3 + xj * xk**2 - xi**3)
-            Phi[j, 0, edge_idx + idx] = kD * (xi**2 * xk - xj**3 + xi * xk**2 - xj**3)
-            Phi[k_idx, 0, edge_idx + idx] = kD * (xi**2 * xj - xk**3 + xi * xj**2 - xk**3)
+        triangles_tensor = all_possible_edges['triangles']  # [n_triangles, 3]
+        i_idx = triangles_tensor[:, 0]
+        j_idx = triangles_tensor[:, 1]
+        k_idx = triangles_tensor[:, 2]
+        
+        xi, xj, xk = xold[i_idx], xold[j_idx], xold[k_idx]
+        edge_range = edge_idx + torch.arange(n_triangles, device=device)
+        
+        Phi[i_idx, 0, edge_range] = kD * (xj**2 * xk - xi**3 + xj * xk**2 - xi**3)
+        Phi[j_idx, 0, edge_range] = kD * (xi**2 * xk - xj**3 + xi * xk**2 - xj**3)
+        Phi[k_idx, 0, edge_range] = kD * (xi**2 * xj - xk**3 + xi * xj**2 - xk**3)
         edge_idx += n_triangles
     
-    # 4-edges - Vectorized processing
+    # 4-edges - FULLY Vectorized
     if n_quads > 0:
-        quads_tensor = torch.tensor(all_possible_edges['quads'], device=device) - 1  # [n_quads, 4]
-        for idx, quad in enumerate(quads_tensor):
-            i, j, k_idx, l = quad[0], quad[1], quad[2], quad[3]
-            xi, xj, xk, xl = xold[i], xold[j], xold[k_idx], xold[l]
-            
-            Phi[i, 0, edge_idx + idx] = kD * (xj**2 * xk * xl - xi**3)
-            Phi[j, 0, edge_idx + idx] = kD * (xi**2 * xk * xl - xj**3)
-            Phi[k_idx, 0, edge_idx + idx] = kD * (xi**2 * xj * xl - xk**3)
-            Phi[l, 0, edge_idx + idx] = kD * (xi**2 * xj * xk - xl**3)
+        quads_tensor = all_possible_edges['quads']  # [n_quads, 4]
+        i_idx = quads_tensor[:, 0]
+        j_idx = quads_tensor[:, 1]
+        k_idx = quads_tensor[:, 2]
+        l_idx = quads_tensor[:, 3]
+        
+        xi, xj, xk, xl = xold[i_idx], xold[j_idx], xold[k_idx], xold[l_idx]
+        edge_range = edge_idx + torch.arange(n_quads, device=device)
+        
+        Phi[i_idx, 0, edge_range] = kD * (xj**2 * xk * xl - xi**3)
+        Phi[j_idx, 0, edge_range] = kD * (xi**2 * xk * xl - xj**3)
+        Phi[k_idx, 0, edge_range] = kD * (xi**2 * xj * xl - xk**3)
+        Phi[l_idx, 0, edge_range] = kD * (xi**2 * xj * xk - xl**3)
         edge_idx += n_quads
     
-    # 5-edges - Vectorized processing
+    # 5-edges - FULLY Vectorized
     if n_quints > 0:
-        quints_tensor = torch.tensor(all_possible_edges['quints'], device=device) - 1  # [n_quints, 5]
-        for idx, quint in enumerate(quints_tensor):
-            i, j, k_idx, l, m = quint[0], quint[1], quint[2], quint[3], quint[4]
-            yi, yj, yk, yl, ym = yold[i], yold[j], yold[k_idx], yold[l], yold[m]
-            
-            Phi[i, 1, edge_idx + idx] = kD * (yj**2 * yk * yl * ym - yi**3)
-            Phi[j, 1, edge_idx + idx] = kD * (yi**2 * yk * yl * ym - yj**3)
-            Phi[k_idx, 1, edge_idx + idx] = kD * (yi**2 * yj * yl * ym - yk**3)
-            Phi[l, 1, edge_idx + idx] = kD * (yi**2 * yj * yk * ym - yl**3)
-            Phi[m, 1, edge_idx + idx] = kD * (yi**2 * yj * yk * yl - ym**3)
+        quints_tensor = all_possible_edges['quints']  # [n_quints, 5]
+        i_idx = quints_tensor[:, 0]
+        j_idx = quints_tensor[:, 1]
+        k_idx = quints_tensor[:, 2]
+        l_idx = quints_tensor[:, 3]
+        m_idx = quints_tensor[:, 4]
+        
+        yi, yj, yk, yl, ym = yold[i_idx], yold[j_idx], yold[k_idx], yold[l_idx], yold[m_idx]
+        edge_range = edge_idx + torch.arange(n_quints, device=device)
+        
+        Phi[i_idx, 1, edge_range] = kD * (yj**2 * yk * yl * ym - yi**3)
+        Phi[j_idx, 1, edge_range] = kD * (yi**2 * yk * yl * ym - yj**3)
+        Phi[k_idx, 1, edge_range] = kD * (yi**2 * yj * yl * ym - yk**3)
+        Phi[l_idx, 1, edge_range] = kD * (yi**2 * yj * yk * ym - yl**3)
+        Phi[m_idx, 1, edge_range] = kD * (yi**2 * yj * yk * yl - ym**3)
         edge_idx += n_quints
     
-    # 6-edges - Vectorized processing
+    # 6-edges - FULLY Vectorized
     if n_sexts > 0:
-        sexts_tensor = torch.tensor(all_possible_edges['sexts'], device=device) - 1  # [n_sexts, 6]
-        for idx, sext in enumerate(sexts_tensor):
-            i, j, k_idx, l, m, n = sext[0], sext[1], sext[2], sext[3], sext[4], sext[5]
-            yi, yj, yk, yl, ym, yn = yold[i], yold[j], yold[k_idx], yold[l], yold[m], yold[n]
-            
-            Phi[i, 1, edge_idx + idx] = kD * (yj**2 * yk * yl * ym * yn - yi**3)
-            Phi[j, 1, edge_idx + idx] = kD * (yi**2 * yk * yl * ym * yn - yj**3)
-            Phi[k_idx, 1, edge_idx + idx] = kD * (yi**2 * yj * yl * ym * yn - yk**3)
-            Phi[l, 1, edge_idx + idx] = kD * (yi**2 * yj * yk * ym * yn - yl**3)
-            Phi[m, 1, edge_idx + idx] = kD * (yi**2 * yj * yk * yl * yn - ym**3)
-            Phi[n, 1, edge_idx + idx] = kD * (yi**2 * yj * yk * yl * ym - yn**3)
+        sexts_tensor = all_possible_edges['sexts']  # [n_sexts, 6]
+        i_idx = sexts_tensor[:, 0]
+        j_idx = sexts_tensor[:, 1]
+        k_idx = sexts_tensor[:, 2]
+        l_idx = sexts_tensor[:, 3]
+        m_idx = sexts_tensor[:, 4]
+        n_idx = sexts_tensor[:, 5]
+        
+        yi, yj, yk, yl, ym, yn = yold[i_idx], yold[j_idx], yold[k_idx], yold[l_idx], yold[m_idx], yold[n_idx]
+        edge_range = edge_idx + torch.arange(n_sexts, device=device)
+        
+        Phi[i_idx, 1, edge_range] = kD * (yj**2 * yk * yl * ym * yn - yi**3)
+        Phi[j_idx, 1, edge_range] = kD * (yi**2 * yk * yl * ym * yn - yj**3)
+        Phi[k_idx, 1, edge_range] = kD * (yi**2 * yj * yl * ym * yn - yk**3)
+        Phi[l_idx, 1, edge_range] = kD * (yi**2 * yj * yk * ym * yn - yl**3)
+        Phi[m_idx, 1, edge_range] = kD * (yi**2 * yj * yk * yl * yn - ym**3)
+        Phi[n_idx, 1, edge_range] = kD * (yi**2 * yj * yk * yl * ym - yn**3)
         edge_idx += n_sexts
     
-    # 7-edges - Vectorized processing
+    # 7-edges - FULLY Vectorized
     if n_septs > 0:
-        septs_tensor = torch.tensor(all_possible_edges['septs'], device=device) - 1  # [n_septs, 7]
-        for idx, sept in enumerate(septs_tensor):
-            i, j, k_idx, l, m, n, o = sept[0], sept[1], sept[2], sept[3], sept[4], sept[5], sept[6]
-            zi, zj, zk, zl, zm, zn, zo = zold[i], zold[j], zold[k_idx], zold[l], zold[m], zold[n], zold[o]
-            
-            Phi[i, 2, edge_idx + idx] = kD * (zj**2 * zk * zl * zm * zn * zo - zi**3)
-            Phi[j, 2, edge_idx + idx] = kD * (zi**2 * zk * zl * zm * zn * zo - zj**3)
-            Phi[k_idx, 2, edge_idx + idx] = kD * (zi**2 * zj * zl * zm * zn * zo - zk**3)
-            Phi[l, 2, edge_idx + idx] = kD * (zi**2 * zj * zk * zm * zn * zo - zl**3)
-            Phi[m, 2, edge_idx + idx] = kD * (zi**2 * zj * zk * zl * zn * zo - zm**3)
-            Phi[n, 2, edge_idx + idx] = kD * (zi**2 * zj * zk * zl * zm * zo - zn**3)
-            Phi[o, 2, edge_idx + idx] = kD * (zi**2 * zj * zk * zl * zm * zn - zo**3)
+        septs_tensor = all_possible_edges['septs']  # [n_septs, 7]
+        i_idx = septs_tensor[:, 0]
+        j_idx = septs_tensor[:, 1]
+        k_idx = septs_tensor[:, 2]
+        l_idx = septs_tensor[:, 3]
+        m_idx = septs_tensor[:, 4]
+        n_idx = septs_tensor[:, 5]
+        o_idx = septs_tensor[:, 6]
+        
+        zi, zj, zk, zl, zm, zn, zo = zold[i_idx], zold[j_idx], zold[k_idx], zold[l_idx], zold[m_idx], zold[n_idx], zold[o_idx]
+        edge_range = edge_idx + torch.arange(n_septs, device=device)
+        
+        Phi[i_idx, 2, edge_range] = kD * (zj**2 * zk * zl * zm * zn * zo - zi**3)
+        Phi[j_idx, 2, edge_range] = kD * (zi**2 * zk * zl * zm * zn * zo - zj**3)
+        Phi[k_idx, 2, edge_range] = kD * (zi**2 * zj * zl * zm * zn * zo - zk**3)
+        Phi[l_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zm * zn * zo - zl**3)
+        Phi[m_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zl * zn * zo - zm**3)
+        Phi[n_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zl * zm * zo - zn**3)
+        Phi[o_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zl * zm * zn - zo**3)
     
     return Phi  # [N, 3, N_total_hyperedges]
 
@@ -242,10 +314,6 @@ def get_hyperedge_config(N, max_order=7):
 
 
 def generate_all_possible_hyperedges(N, max_order):
-    """
-    Generate all possible hyperedges (for AUC computation)
-    Returns: Dictionary containing lists of all possible hyperedges for each order
-    """
     all_possible = {}
     
     if max_order >= 2:
@@ -406,8 +474,14 @@ def plot_roc_curves(roc_data, auc_scores, save_dir):
     print(f"ROC curves saved to {os.path.join(save_dir, 'roc_curves_7_order.png')}")
 
 
-def generate_training_data(N, edge_config):
-    """Generate true Rossler system data for training"""
+def generate_training_data(N, edge_config, n_samples=11):
+    """Generate true Rossler system data for training
+    
+    Args:
+        N: Number of nodes
+        edge_config: Hyperedge configuration
+        n_samples: Number of time samples (default=11)
+    """
     # Convert configuration to numpy arrays
     EdgeList = np.array(edge_config['edges']) if edge_config['edges'] else np.empty((0, 2), dtype=int)
     TriangleList = np.array(edge_config['triangles']) if edge_config['triangles'] else np.empty((0, 3), dtype=int)
@@ -511,7 +585,7 @@ def generate_training_data(N, edge_config):
     
     # Solve ODE
     t_span = (0, 20)
-    t_eval = np.linspace(0, 20, 301)
+    t_eval = np.linspace(0, 20, n_samples)
     sol = solve_ivp(roessler_hoi, t_span, x0, t_eval=t_eval, method='RK45', rtol=1e-10, atol=1e-12)
     
     x_data_flat = sol.y.T  # [T, 3N]
@@ -524,7 +598,20 @@ def generate_training_data(N, edge_config):
     return sol.t, x_data  # [T], [T, N, 3]
 
 
-def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=32, gpu_id=0, noise=0):
+def train_integral_model(
+    N=8, 
+    max_order=7, 
+    n_epochs=10000, 
+    lr=0.001, 
+    batch_size=32, 
+    gpu_id=6,
+    use_nn=True,
+    nn_hidden_dim=128,
+    nn_layers=4,
+    stage1_epochs=2500,
+    resample_factor=10,
+    n_samples=11
+):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     edge_config = get_hyperedge_config(N, max_order)
@@ -552,19 +639,122 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
     print(f"  7-edges: {len(edge_config['septs'])}")
     
     print("\nGenerating training data...")
-    t_data, x_data = generate_training_data(N, edge_config)
+    t_data, x_data = generate_training_data(N, edge_config, n_samples)
     n_times = len(t_data)
     print(f"Data shape: {x_data.shape}, Time points: {n_times}")
+
+    
+    # ============================================================================
+    # NEURAL NETWORK TRAINING + RESAMPLING (ONLY DIFFERENCE FROM Rossler_Integral.py)
+    # ============================================================================
+    if use_nn:
+        print("\n" + "="*80)
+        print("LINEAR INTERPOLATION MODE: Using piecewise linear curves")
+        print("="*80)
+        
+        # Flatten x_data to [T, 3N]
+        x_data_flat = x_data.reshape(n_times, 3 * N)
+        
+        print(f"\nUsing LINEAR INTERPOLATION (no neural network)")
+        print(f"  Original {n_times} points will be connected by straight lines")
+        print(f"  This GUARANTEES passing through all observation points!")
+        
+        # Dense resampling using LINEAR interpolation
+        print(f"\nDense resampling using linear interpolation...")
+        n_resampled = (n_times - 1) * resample_factor + 1
+        t_data_resampled = np.linspace(t_data[0], t_data[-1], n_resampled)
+        
+        print(f"Original data points: {n_times}")
+        print(f"Resampled data points: {n_resampled} ({resample_factor}x denser)")
+        
+        # Use scipy's interp1d for linear interpolation
+        from scipy.interpolate import interp1d
+        x_data_resampled = np.zeros((n_resampled, N, 3))
+        
+        for node_idx in range(N):
+            for coord_idx in range(3):
+                # Linear interpolation for each node-coordinate pair
+                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], 
+                                      kind='linear', fill_value='extrapolate')
+                x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
+        
+        print(f"Linear interpolation completed!")
+        
+        # For visualization consistency
+        x_data_resampled_cpu = x_data_resampled
+        
+        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5*N))
+        coord_names = ['x', 'y', 'z']
+        
+        for node_idx in range(N):
+            for coord_idx in range(3):
+                ax = axes[node_idx, coord_idx]
+                
+                # Plot original data
+                ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
+                       label='Original (ODE)', markersize=4, alpha=0.7, color='blue')
+                
+                # Plot resampled data
+                ax.plot(t_data_resampled, x_data_resampled_cpu[:, node_idx, coord_idx], 
+                       '-', label='Resampled (ResNet)', linewidth=1, alpha=0.8, color='red')
+                
+                # Labels and formatting
+                if node_idx == 0:
+                    ax.set_title(f'{coord_names[coord_idx]}-coordinate', fontsize=12)
+                if coord_idx == 0:
+                    ax.set_ylabel(f'Node {node_idx+1}', fontsize=11)
+                if node_idx == N-1:
+                    ax.set_xlabel('Time', fontsize=10)
+                ax.grid(True, alpha=0.3)
+                if node_idx == 0 and coord_idx == 0:
+                    ax.legend(fontsize=9)
+        
+        plt.tight_layout()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = f"results_integral/{n_samples}/{timestamp}"
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, 'resnet_vs_original.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Comparison plot saved to {os.path.join(save_dir, 'resnet_vs_original.png')}")
+        
+        from scipy.interpolate import interp1d
+        errors_per_node = []
+        for node_idx in range(N):
+            for coord_idx in range(3):
+                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], kind='cubic')
+                x_orig_interp = interp_func(t_data_resampled)
+                
+                error = np.abs(x_data_resampled_cpu[:, node_idx, coord_idx] - x_orig_interp)
+                errors_per_node.append(error)
+        
+        errors_all = np.concatenate(errors_per_node)
+        print(f"\nResNet fitting error statistics:")
+        print(f"  Mean absolute error: {errors_all.mean():.6f}")
+        print(f"  Max absolute error: {errors_all.max():.6f}")
+        print(f"  Std of error: {errors_all.std():.6f}")
+        
+        t_data = t_data_resampled
+        x_data = x_data_resampled_cpu
+        n_times = n_resampled
+        print(f"\nReplaced data with resampled version: {x_data.shape}")
+        print("="*80 + "\n")
+    
+    # ============================================================================
+    # IDENTICAL TO Rossler_Integral.py FROM HERE
+    # ============================================================================
     
     print("Transferring data to GPU...")
     t_data_gpu = torch.tensor(t_data, dtype=torch.float32, device=device)
     x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)  # [T, N, 3]
     
-    if noise > 0:
-        noise_std = noise * torch.std(x_data_gpu)
-        noise_tensor = torch.randn_like(x_data_gpu) * noise_std
-        x_data_gpu = x_data_gpu + noise_tensor
-        print(f"Added {noise*100:.1f}% noise to data (std={noise_std:.6f})")
+    print("Converting hyperedge indices to GPU tensors...")
+    # Pre-convert all hyperedge indices to GPU tensors (HUGE speedup!)
+    all_possible_edges_gpu = {}
+    for key in ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']:
+        if len(all_possible_edges[key]) > 0:
+            all_possible_edges_gpu[key] = torch.tensor(all_possible_edges[key], dtype=torch.long, device=device) - 1
+        else:
+            all_possible_edges_gpu[key] = torch.empty((0, len(all_possible_edges[key][0]) if all_possible_edges[key] else 2), dtype=torch.long, device=device)
     
     print("Pre-computing coupling tensor Phi and basic dynamics f for all time points...")
     Phi_all = torch.zeros((n_times, N, 3, n_hyperedges), device=device)  # [T, N, 3, n_hyperedges]
@@ -572,7 +762,7 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
     
     for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
         x_t = x_data_gpu[t_idx]  # [N, 3]
-        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges, N, device)  # [N, 3, n_hyperedges]
+        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges_gpu, N, device)  # [N, 3, n_hyperedges]
         f_all[t_idx] = roessler_dynamics(x_t, N)  # [N, 3]
     
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]  # [T-1]
@@ -587,7 +777,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
     n_sexts = len(all_possible_edges['sexts'])
     n_septs = len(all_possible_edges['septs'])
     
-    # 2-edges: bias = -2
     if n_edges > 0:
         A[A_idx:A_idx+n_edges] -= 2.0
         A_idx += n_edges
@@ -631,13 +820,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
         
         total_loss = torch.mean(torch.stack(losses))
         
-        # if epoch >= n_epochs - 10000:
-        #     progress = (epoch - (n_epochs - 10000)) / 10000  # 0 to 1
-        #     # sparsity_weight = 0.00001 * progress
-        #     sparsity_weight = 0
-        #     l1_loss = sparsity_weight * torch.sum(torch.abs(A))
-        #     total_loss = total_loss + l1_loss
-        
         total_loss.backward()
         optimizer.step()
         
@@ -659,7 +841,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
             A_current = A.detach().cpu().numpy()
             auc_scores, _ = compute_auc_scores(A_current, edge_config, N, max_order)
             
-            # Detailed diagnostic info
             all_possible = generate_all_possible_hyperedges(N, max_order)
             A_flat = A_current.flatten()
             A_idx = 0
@@ -674,7 +855,6 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
                 n_possible = len(possible_edges)
                 n_true = len(true_edges)
                 
-                # Get A values for this order
                 A_order = A_flat[A_idx:A_idx+n_possible]
                 A_idx += n_possible
                 
@@ -685,23 +865,35 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
                     print(f"  {order_label}: N/A | Possible={n_possible}, True={n_true}")
             print('='*60 + '\n')
     
-    return A.detach().cpu().numpy(), edge_config
+    return A.detach().cpu().numpy(), edge_config, save_dir
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Rossler Integral Model with Hypergraph Topology Learning')
+    parser.add_argument('--n_samples', type=int, default=11, 
+                        help='Number of time samples from ODE solver (default: 11)')
+    parser.add_argument('--n_epochs', type=int, default=20000,
+                        help='Number of training epochs (default: 20000)')
+    parser.add_argument('--lr', type=float, default=0.01,
+                        help='Learning rate (default: 0.01)')
+    parser.add_argument('--gpu_id', type=int, default=6,
+                        help='GPU device ID (default: 6)')
+    args = parser.parse_args()
+    
     N = 8
     max_order = 7
-    gpu_id = 0
-    noise = 0
     
-    A_learned, edge_config = train_integral_model(
+    A_learned, edge_config, save_dir = train_integral_model(
         N=N, 
         max_order=max_order, 
-        n_epochs=20000, 
-        lr=0.01, 
+        n_epochs=args.n_epochs, 
+        lr=args.lr, 
         batch_size=32,
-        gpu_id=gpu_id,
-        noise=noise
+        gpu_id=args.gpu_id,
+        use_nn=True,
+        stage1_epochs=10000,
+        resample_factor=10,
+        n_samples=args.n_samples
     )
     
     print("\nComputing AUC scores...")
@@ -714,14 +906,10 @@ if __name__ == "__main__":
         else:
             print(f"  {order_label}: N/A (no positive/negative samples)")
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = f"results/integral_{timestamp}"
-    os.makedirs(save_dir, exist_ok=True)
-    
     np.save(f"{save_dir}/A_learned.npy", A_learned)
     
     with open(f"{save_dir}/auc_scores.txt", 'w') as f:
-        f.write(f"N={N}, max_order={max_order}\n")
+        f.write(f"N={N}, max_order={max_order}, n_samples={args.n_samples}\n")
         f.write("\nAUC Scores:\n")
         for order_label, auc_score in auc_scores.items():
             if auc_score is not None:
