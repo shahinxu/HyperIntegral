@@ -349,6 +349,168 @@ def generate_all_possible_hyperedges(N, max_order):
     return all_possible
 
 
+def get_legendre_quadrature(n_quad: int, device):
+    """Return Gauss-Legendre nodes and weights on [-1, 1] as torch tensors."""
+    import numpy as np
+
+    nodes, weights = np.polynomial.legendre.leggauss(n_quad)
+    nodes = torch.tensor(nodes, dtype=torch.float32, device=device)
+    weights = torch.tensor(weights, dtype=torch.float32, device=device)
+    return nodes, weights
+
+
+def compute_dynamics_with_A(x_t, A, all_possible_edges_gpu, N, device):
+    """Compute f(x_t) + Phi(x_t) @ A at a single time point.
+
+    x_t: [N, 3]
+    A:  [n_hyperedges, 1]
+    Returns: [N, 3]
+    """
+    # Basic Rossler dynamics f(x)
+    f_t = roessler_dynamics(x_t, N)  # [N, 3]
+
+    xold = x_t[:, 0]
+    yold = x_t[:, 1]
+    zold = x_t[:, 2]
+    k, kD = 0.4, 0.3
+
+    A_flat = A.view(-1)
+    PhiA = torch.zeros((N, 3), device=device)
+    offset = 0
+
+    # 2-edges (x)
+    edges = all_possible_edges_gpu['edges']
+    n_edges = edges.shape[0]
+    if n_edges > 0:
+        coeff = A_flat[offset:offset + n_edges]
+        i_idx = edges[:, 0]
+        j_idx = edges[:, 1]
+        diff = k * (xold[j_idx] - xold[i_idx])
+        contrib = diff * coeff
+        PhiA[:, 0].index_add_(0, i_idx, contrib)
+        PhiA[:, 0].index_add_(0, j_idx, -contrib)
+        offset += n_edges
+
+    # 3-edges (x)
+    triangles = all_possible_edges_gpu['triangles']
+    n_triangles = triangles.shape[0]
+    if n_triangles > 0:
+        coeff = A_flat[offset:offset + n_triangles]
+        i_idx = triangles[:, 0]
+        j_idx = triangles[:, 1]
+        k_idx = triangles[:, 2]
+        xi, xj, xk = xold[i_idx], xold[j_idx], xold[k_idx]
+        term_i = kD * (xj**2 * xk - xi**3 + xj * xk**2 - xi**3) * coeff
+        term_j = kD * (xi**2 * xk - xj**3 + xi * xk**2 - xj**3) * coeff
+        term_k = kD * (xi**2 * xj - xk**3 + xi * xj**2 - xk**3) * coeff
+        PhiA[:, 0].index_add_(0, i_idx, term_i)
+        PhiA[:, 0].index_add_(0, j_idx, term_j)
+        PhiA[:, 0].index_add_(0, k_idx, term_k)
+        offset += n_triangles
+
+    # 4-edges (x)
+    quads = all_possible_edges_gpu['quads']
+    n_quads = quads.shape[0]
+    if n_quads > 0:
+        coeff = A_flat[offset:offset + n_quads]
+        i_idx = quads[:, 0]
+        j_idx = quads[:, 1]
+        k_idx = quads[:, 2]
+        l_idx = quads[:, 3]
+        xi, xj, xk, xl = xold[i_idx], xold[j_idx], xold[k_idx], xold[l_idx]
+        term_i = kD * (xj**2 * xk * xl - xi**3) * coeff
+        term_j = kD * (xi**2 * xk * xl - xj**3) * coeff
+        term_k = kD * (xi**2 * xj * xl - xk**3) * coeff
+        term_l = kD * (xi**2 * xj * xk - xl**3) * coeff
+        PhiA[:, 0].index_add_(0, i_idx, term_i)
+        PhiA[:, 0].index_add_(0, j_idx, term_j)
+        PhiA[:, 0].index_add_(0, k_idx, term_k)
+        PhiA[:, 0].index_add_(0, l_idx, term_l)
+        offset += n_quads
+
+    # 5-edges (y)
+    quints = all_possible_edges_gpu['quints']
+    n_quints = quints.shape[0]
+    if n_quints > 0:
+        coeff = A_flat[offset:offset + n_quints]
+        i_idx = quints[:, 0]
+        j_idx = quints[:, 1]
+        k_idx = quints[:, 2]
+        l_idx = quints[:, 3]
+        m_idx = quints[:, 4]
+        yi, yj, yk, yl, ym = yold[i_idx], yold[j_idx], yold[k_idx], yold[l_idx], yold[m_idx]
+        term_i = kD * (yj**2 * yk * yl * ym - yi**3) * coeff
+        term_j = kD * (yi**2 * yk * yl * ym - yj**3) * coeff
+        term_k = kD * (yi**2 * yj * yl * ym - yk**3) * coeff
+        term_l = kD * (yi**2 * yj * yk * ym - yl**3) * coeff
+        term_m = kD * (yi**2 * yj * yk * yl - ym**3) * coeff
+        PhiA[:, 1].index_add_(0, i_idx, term_i)
+        PhiA[:, 1].index_add_(0, j_idx, term_j)
+        PhiA[:, 1].index_add_(0, k_idx, term_k)
+        PhiA[:, 1].index_add_(0, l_idx, term_l)
+        PhiA[:, 1].index_add_(0, m_idx, term_m)
+        offset += n_quints
+
+    # 6-edges (y)
+    sexts = all_possible_edges_gpu['sexts']
+    n_sexts = sexts.shape[0]
+    if n_sexts > 0:
+        coeff = A_flat[offset:offset + n_sexts]
+        i_idx = sexts[:, 0]
+        j_idx = sexts[:, 1]
+        k_idx = sexts[:, 2]
+        l_idx = sexts[:, 3]
+        m_idx = sexts[:, 4]
+        n_idx = sexts[:, 5]
+        yi, yj, yk, yl, ym, yn = yold[i_idx], yold[j_idx], yold[k_idx], yold[l_idx], yold[m_idx], yold[n_idx]
+        term_i = kD * (yj**2 * yk * yl * ym * yn - yi**3) * coeff
+        term_j = kD * (yi**2 * yk * yl * ym * yn - yj**3) * coeff
+        term_k = kD * (yi**2 * yj * yl * ym * yn - yk**3) * coeff
+        term_l = kD * (yi**2 * yj * yk * ym * yn - yl**3) * coeff
+        term_m = kD * (yi**2 * yj * yk * yl * yn - ym**3) * coeff
+        term_n = kD * (yi**2 * yj * yk * yl * ym - yn**3) * coeff
+        PhiA[:, 1].index_add_(0, i_idx, term_i)
+        PhiA[:, 1].index_add_(0, j_idx, term_j)
+        PhiA[:, 1].index_add_(0, k_idx, term_k)
+        PhiA[:, 1].index_add_(0, l_idx, term_l)
+        PhiA[:, 1].index_add_(0, m_idx, term_m)
+        PhiA[:, 1].index_add_(0, n_idx, term_n)
+        offset += n_sexts
+
+    # 7-edges (z)
+    septs = all_possible_edges_gpu['septs']
+    n_septs = septs.shape[0]
+    if n_septs > 0:
+        coeff = A_flat[offset:offset + n_septs]
+        i_idx = septs[:, 0]
+        j_idx = septs[:, 1]
+        k_idx = septs[:, 2]
+        l_idx = septs[:, 3]
+        m_idx = septs[:, 4]
+        n_idx = septs[:, 5]
+        o_idx = septs[:, 6]
+        zi, zj, zk, zl, zm, zn, zo = (
+            zold[i_idx], zold[j_idx], zold[k_idx], zold[l_idx], zold[m_idx], zold[n_idx], zold[o_idx]
+        )
+        term_i = kD * (zj**2 * zk * zl * zm * zn * zo - zi**3) * coeff
+        term_j = kD * (zi**2 * zk * zl * zm * zn * zo - zj**3) * coeff
+        term_k = kD * (zi**2 * zj * zl * zm * zn * zo - zk**3) * coeff
+        term_l = kD * (zi**2 * zj * zk * zm * zn * zo - zl**3) * coeff
+        term_m = kD * (zi**2 * zj * zk * zl * zn * zo - zm**3) * coeff
+        term_n = kD * (zi**2 * zj * zk * zl * zm * zo - zn**3) * coeff
+        term_o = kD * (zi**2 * zj * zk * zl * zm * zn - zo**3) * coeff
+        PhiA[:, 2].index_add_(0, i_idx, term_i)
+        PhiA[:, 2].index_add_(0, j_idx, term_j)
+        PhiA[:, 2].index_add_(0, k_idx, term_k)
+        PhiA[:, 2].index_add_(0, l_idx, term_l)
+        PhiA[:, 2].index_add_(0, m_idx, term_m)
+        PhiA[:, 2].index_add_(0, n_idx, term_n)
+        PhiA[:, 2].index_add_(0, o_idx, term_o)
+        offset += n_septs
+
+    return f_t + PhiA
+
+
 def compute_auc_scores(A_learned, edge_config, N, max_order):
     """
     Compute AUC scores for each order
@@ -615,7 +777,11 @@ def train_integral_model(
     stage1_epochs=2500,
     resample_factor=10,
     n_samples=11,
-    noise=0.0
+    noise=0.0,
+    physics_batch_size=8,
+    physics_every=5,
+    n_quad=8,
+    physics_ramp_epochs=2000
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -637,304 +803,289 @@ def train_integral_model(
     print(f"  7-edges: {len(all_possible_edges['septs'])}")
     print(f"\nTrue hyperedges:")
     print(f"  2-edges: {len(edge_config['edges'])}")
-    print(f"  3-edges: {len(edge_config['triangles'])}")
-    print(f"  4-edges: {len(edge_config['quads'])}")
-    print(f"  5-edges: {len(edge_config['quints'])}")
-    print(f"  6-edges: {len(edge_config['sexts'])}")
-    print(f"  7-edges: {len(edge_config['septs'])}")
-    
     print("\nGenerating training data...")
     t_data, x_data = generate_training_data(N, edge_config, n_samples, noise=noise)
     n_times = len(t_data)
     print(f"Data shape: {x_data.shape}, Time points: {n_times}")
     if noise > 0:
         print(f"Added Gaussian noise with std={noise}")
-        # Also generate clean data for visualization comparison
-        print("Generating clean (no-noise) ground truth data for comparison...")
-        _, x_data_clean = generate_training_data(N, edge_config, n_samples, noise=0.0)
-    else:
-        x_data_clean = None
 
-    
-    # ============================================================================
-    # NEURAL NETWORK TRAINING + RESAMPLING (REAL NN VERSION!)
-    # ============================================================================
-    if use_nn:
-        print("\n" + "="*80)
-        print("REAL NEURAL NETWORK MODE: Training TimeResNet to denoise & fit data")
-        print("="*80)
-        
-        # Flatten x_data to [T, 3N]
-        x_data_flat = x_data.reshape(n_times, 3 * N)
-        
-        # Transfer to GPU
-        t_data_nn = torch.tensor(t_data, dtype=torch.float32, device=device).unsqueeze(1)  # [T, 1]
-        x_data_nn = torch.tensor(x_data_flat, dtype=torch.float32, device=device)  # [T, 3N]
-        
-        # Initialize neural network
-        print(f"\nInitializing TimeResNet:")
-        print(f"  Input: time (1D)")
-        print(f"  Output: state of {N} nodes × 3 coords = {3*N}D")
-        print(f"  Hidden dim: {nn_hidden_dim}")
-        print(f"  Num layers: {nn_layers}")
-        
-        resnet = TimeResNet(
-            output_dim=3*N, 
-            hidden_dim=nn_hidden_dim, 
-            num_layers=nn_layers,
-            dropout=0.0
-        ).to(device)
-        
-        # Set normalization parameters
-        resnet.t_mean = t_data_nn.mean()
-        resnet.t_std = t_data_nn.std()
-        resnet.x_mean = x_data_nn.mean(dim=0)
-        resnet.x_std = x_data_nn.std(dim=0)
-        
-        # Train neural network to fit the data
-        print(f"\nTraining neural network for {stage1_epochs} epochs...")
-        optimizer_nn = optim.Adam(resnet.parameters(), lr=0.001)
-        
-        pbar_nn = tqdm(range(stage1_epochs), desc="NN Training", ncols=100)
-        for epoch in pbar_nn:
-            optimizer_nn.zero_grad()
-            
-            # Forward pass
-            x_pred = resnet(t_data_nn, normalize=True)  # [T, 3N]
-            
-            # MSE loss
-            loss_nn = torch.mean((x_pred - x_data_nn) ** 2)
-            
-            loss_nn.backward()
-            optimizer_nn.step()
-            
-            if epoch % 100 == 0:
-                pbar_nn.set_postfix({'loss': f'{loss_nn.item():.6f}'})
-        
-        print(f"Neural network training completed! Final loss: {loss_nn.item():.6f}")
-        
-        # Dense resampling using TRAINED NEURAL NETWORK
-        print(f"\nDense resampling using trained ResNet...")
-        n_resampled = (n_times - 1) * resample_factor + 1
-        t_data_resampled = np.linspace(t_data[0], t_data[-1], n_resampled)
-        t_data_resampled_gpu = torch.tensor(t_data_resampled, dtype=torch.float32, device=device).unsqueeze(1)
-        
-        print(f"Original data points: {n_times}")
-        print(f"Resampled data points: {n_resampled} ({resample_factor}x denser)")
-        
-        # Generate resampled data from neural network
+    def flat_to_xyz_torch(x_flat, n_nodes):
+        x_part = x_flat[:, 0:n_nodes]
+        y_part = x_flat[:, n_nodes:2 * n_nodes]
+        z_part = x_flat[:, 2 * n_nodes:3 * n_nodes]
+        return torch.stack([x_part, y_part, z_part], dim=2)
+
+    def flat_to_xyz_numpy(x_flat, n_nodes):
+        x_part = x_flat[:, 0:n_nodes]
+        y_part = x_flat[:, n_nodes:2 * n_nodes]
+        z_part = x_flat[:, 2 * n_nodes:3 * n_nodes]
+        return np.stack([x_part, y_part, z_part], axis=2)
+
+    # Flatten data for NN
+    x_data_flat = np.concatenate([x_data[:, :, 0], x_data[:, :, 1], x_data[:, :, 2]], axis=1)
+    t_data_nn = torch.tensor(t_data, dtype=torch.float32, device=device).unsqueeze(1)  # [T,1]
+    x_data_nn = torch.tensor(x_data_flat, dtype=torch.float32, device=device)          # [T,3N]
+
+    # Initialize trajectory network
+    print("\n" + "="*80)
+    print("END-TO-END MODE: Training TimeResNet + A jointly")
+    print("="*80)
+    print(f"Initializing TimeResNet with output_dim={3*N}, hidden_dim={nn_hidden_dim}, num_layers={nn_layers}")
+
+    net = TimeResNet(
+        output_dim=3 * N,
+        hidden_dim=nn_hidden_dim,
+        num_layers=nn_layers,
+        dropout=0.0,
+    ).to(device)
+
+    # Normalization stats
+    net.t_mean = t_data_nn.mean()
+    net.t_std = t_data_nn.std()
+    net.x_mean = x_data_nn.mean(dim=0)
+    net.x_std = x_data_nn.std(dim=0)
+
+    # Count hyperedges
+    n_hyperedges = (
+        len(all_possible_edges['edges'])
+        + len(all_possible_edges['triangles'])
+        + len(all_possible_edges['quads'])
+        + len(all_possible_edges['quints'])
+        + len(all_possible_edges['sexts'])
+        + len(all_possible_edges['septs'])
+    )
+
+    # Learnable A
+    A = torch.zeros(n_hyperedges, 1, device=device, requires_grad=True)
+
+    # Move candidate hyperedges to GPU (0-based indices)
+    all_possible_edges_gpu = {}
+    for key in ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']:
+        if len(all_possible_edges[key]) > 0:
+            all_possible_edges_gpu[key] = (
+                torch.tensor(all_possible_edges[key], dtype=torch.long, device=device) - 1
+            )
+        else:
+            all_possible_edges_gpu[key] = torch.empty((0, 2), dtype=torch.long, device=device)
+
+    # Gauss-Legendre quadrature nodes/weights on [-1,1]
+    quad_nodes, quad_weights = get_legendre_quadrature(n_quad, device)
+
+    # Joint optimizer for net and A
+    optimizer_joint = optim.Adam(
+        [
+            {'params': net.parameters(), 'lr': lr},
+            {'params': [A], 'lr': lr},
+        ]
+    )
+
+    lambda_phys = 1.0
+    total_time = float(t_data[-1] - t_data[0])
+    min_window = total_time / 5.0  # minimum integration window length
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = f"results_integral_pinn/sample_{n_samples}_noise_{noise}/{timestamp}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    def save_comparison_plot(epoch_label=None):
         with torch.no_grad():
-            x_data_resampled_flat = resnet(t_data_resampled_gpu, normalize=True).cpu().numpy()  # [n_resampled, 3N]
-        
-        x_data_resampled = x_data_resampled_flat.reshape(n_resampled, N, 3)
-        print(f"Neural network resampling completed!")
-        
-        # For visualization and error analysis
-        with torch.no_grad():
-            x_data_pred_flat = resnet(t_data_nn, normalize=True).cpu().numpy()  # [T, 3N]
-        x_data_pred = x_data_pred_flat.reshape(n_times, N, 3)
-        
-        x_data_resampled_cpu = x_data_resampled
-        
-        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5*N))
+            x_pred_data_flat = net(t_data_nn, normalize=True).cpu().numpy()
+            x_pred_data = flat_to_xyz_numpy(x_pred_data_flat, N)
+
+            # Dense 500-point trajectory for visualization
+            target_points = 500
+            t_dense = np.linspace(t_data[0], t_data[-1], target_points)
+            t_dense_gpu = torch.tensor(t_dense, dtype=torch.float32, device=device).unsqueeze(1)
+            x_dense_flat = net(t_dense_gpu, normalize=True).cpu().numpy()
+            x_dense_flat = flat_to_xyz_numpy(x_dense_flat, N)
+
+        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5 * N))
         coord_names = ['x', 'y', 'z']
-        
+
         for node_idx in range(N):
             for coord_idx in range(3):
                 ax = axes[node_idx, coord_idx]
-                
-                # Plot ground truth (clean data) if available
-                if x_data_clean is not None:
-                    ax.plot(t_data, x_data_clean[:, node_idx, coord_idx], '-', 
-                           label='Ground Truth (No Noise)', linewidth=2, alpha=0.5, color='black', zorder=1)
-                
-                # Plot original data (potentially with noise)
-                ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
-                       label='Noisy Data' if noise > 0 else 'Original (ODE)', 
-                       markersize=4, alpha=0.7, color='blue', zorder=3)
-                
-                # Plot NN fit on original points
-                ax.plot(t_data, x_data_pred[:, node_idx, coord_idx], 's',
-                       label='NN Fit (sparse)', markersize=3, alpha=0.7, color='green', zorder=4)
-                
-                # Plot dense resampled data
-                ax.plot(t_data_resampled, x_data_resampled_cpu[:, node_idx, coord_idx], 
-                       '-', label='Resampled (ResNet)', linewidth=1, alpha=0.8, color='red', zorder=2)
-                
-                # Labels and formatting
+
+                # Original (possibly noisy) data
+                ax.plot(
+                    t_data,
+                    x_data[:, node_idx, coord_idx],
+                    'o',
+                    label='Original (ODE)' if noise == 0 else 'Noisy Data',
+                    markersize=4,
+                    alpha=0.7,
+                    color='blue',
+                )
+                ax.plot(
+                    t_dense,
+                    x_dense_flat[:, node_idx, coord_idx],
+                    '-',
+                    label='Resampled (ResNet)',
+                    linewidth=1,
+                    alpha=0.8,
+                    color='red',
+                )
                 if node_idx == 0:
                     ax.set_title(f'{coord_names[coord_idx]}-coordinate', fontsize=12)
                 if coord_idx == 0:
                     ax.set_ylabel(f'Node {node_idx+1}', fontsize=11)
-                if node_idx == N-1:
+                if node_idx == N - 1:
                     ax.set_xlabel('Time', fontsize=10)
                 ax.grid(True, alpha=0.3)
                 if node_idx == 0 and coord_idx == 0:
                     ax.legend(fontsize=9)
-        
         plt.tight_layout()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        noise_str = f"_noise_{noise}" if noise > 0 else ""
-        save_dir = f"results_integral_real_nn/n{n_samples}{noise_str}/{timestamp}"
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, 'resnet_vs_original.png'), dpi=150, bbox_inches='tight')
+        suffix = f"_epoch_{epoch_label}" if epoch_label is not None else ""
+        resnet_path = os.path.join(save_dir, f"resnet_vs_original{suffix}.png")
+        plt.savefig(resnet_path, dpi=150, bbox_inches='tight')
         plt.close()
-        print(f"Comparison plot saved to {os.path.join(save_dir, 'resnet_vs_original.png')}")
-        
-        # Compute fitting error on ORIGINAL points
-        errors_fitting = np.abs(x_data_pred - x_data)
-        print(f"\nResNet fitting error on original {n_times} points:")
-        print(f"  Mean absolute error: {errors_fitting.mean():.6f}")
-        print(f"  Max absolute error: {errors_fitting.max():.6f}")
-        print(f"  Std of error: {errors_fitting.std():.6f}")
-        print(f"  -> NN successfully {'denoised' if noise > 0 else 'fit'} the data!")
-        
-        t_data = t_data_resampled
-        x_data = x_data_resampled_cpu
-        n_times = n_resampled
-        print(f"\nReplaced data with resampled version: {x_data.shape}")
-        print("="*80 + "\n")
-    
-    # ============================================================================
-    # IDENTICAL TO Rossler_Integral.py FROM HERE
-    # ============================================================================
-    
-    print("Transferring data to GPU...")
-    t_data_gpu = torch.tensor(t_data, dtype=torch.float32, device=device)
-    x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)  # [T, N, 3]
-    
-    print("Converting hyperedge indices to GPU tensors...")
-    # Pre-convert all hyperedge indices to GPU tensors (HUGE speedup!)
-    all_possible_edges_gpu = {}
-    for key in ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']:
-        if len(all_possible_edges[key]) > 0:
-            all_possible_edges_gpu[key] = torch.tensor(all_possible_edges[key], dtype=torch.long, device=device) - 1
-        else:
-            all_possible_edges_gpu[key] = torch.empty((0, len(all_possible_edges[key][0]) if all_possible_edges[key] else 2), dtype=torch.long, device=device)
-    
-    print("Pre-computing coupling tensor Phi and basic dynamics f for all time points...")
-    Phi_all = torch.zeros((n_times, N, 3, n_hyperedges), device=device)  # [T, N, 3, n_hyperedges]
-    f_all = torch.zeros((n_times, N, 3), device=device)  # [T, N, 3]
-    
-    for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-        x_t = x_data_gpu[t_idx]  # [N, 3]
-        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges_gpu, N, device)  # [N, 3, n_hyperedges]
-        f_all[t_idx] = roessler_dynamics(x_t, N)  # [N, 3]
-    
-    dt_all = t_data_gpu[1:] - t_data_gpu[:-1]  # [T-1]
-    print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
-    
-    A = torch.randn(n_hyperedges, 1, device=device)
-    A_idx = 0
-    n_edges = len(all_possible_edges['edges'])
-    n_triangles = len(all_possible_edges['triangles'])
-    n_quads = len(all_possible_edges['quads'])
-    n_quints = len(all_possible_edges['quints'])
-    n_sexts = len(all_possible_edges['sexts'])
-    n_septs = len(all_possible_edges['septs'])
-    
-    if n_edges > 0:
-        A[A_idx:A_idx+n_edges] -= 2.0
-        A_idx += n_edges
-    if n_triangles > 0:
-        A[A_idx:A_idx+n_triangles] -= 3.0
-        A_idx += n_triangles
-    remaining = n_quads + n_quints + n_sexts + n_septs
-    if remaining > 0:
-        A[A_idx:A_idx+remaining] -= 4.0
-    
-    A.requires_grad_(True)
-    
-    optimizer = optim.Adam([A], lr=lr)
-    
-    min_interval = n_times // 3
-    print(f"Using long-range integral constraint: min_interval = {min_interval} (out of {n_times} points)")
-    
-    pbar = tqdm(range(n_epochs), desc="Training Progress", ncols=120)
+        print(f"Comparison plot saved to {resnet_path}")
+        return x_pred_data
+
+    pbar = tqdm(range(n_epochs), desc="End-to-end Training", ncols=120)
     for epoch in pbar:
-        optimizer.zero_grad()
-        losses = []
-        
-        for _ in range(batch_size):
-            idx_i = np.random.randint(0, n_times - min_interval)
-            idx_j = np.random.randint(idx_i + min_interval, n_times)
-            
-            x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, 3]
-            
-            lhs = x_j - x_i  # [N, 3]
-            f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3]
-            Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3, n_hyperedges]
-            dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
-            integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, 3]
-            Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, 3]
-            integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, 3]
-            
-            residual = lhs - integral_f - integral_phi_A
-            loss = torch.mean(residual ** 2)
-            losses.append(loss)
-        
-        total_loss = torch.mean(torch.stack(losses))
-        
+        optimizer_joint.zero_grad()
+
+        # Data-fitting loss
+        x_pred_data = net(t_data_nn, normalize=True)  # [T,3N]
+        loss_data = torch.mean((x_pred_data - x_data_nn) ** 2)
+
+        if epoch < stage1_epochs:
+            loss_phys = torch.tensor(0.0, device=device)
+        elif physics_every > 0:
+            physics_losses = []
+            for _ in range(physics_batch_size):
+                t1 = float(np.random.uniform(t_data[0], t_data[-1] - min_window))
+                t2 = float(np.random.uniform(t1 + min_window, t_data[-1]))
+
+                t_mid = 0.5 * (t1 + t2)
+                t_half = 0.5 * (t2 - t1)
+
+                # Map quadrature nodes from [-1,1] to [t1,t2]
+                t_eval = t_mid + t_half * quad_nodes  # [n_quad]
+                t_eval_nn = t_eval.unsqueeze(1)       # [n_quad,1]
+
+                # Trajectory samples at quadrature points
+                x_eval_flat = net(t_eval_nn, normalize=True)  # [n_quad,3N]
+                x_eval = flat_to_xyz_torch(x_eval_flat, N)    # [n_quad,N,3]
+
+                # Approximate integral of f+PhiA over [t1,t2]
+                integral = torch.zeros(N, 3, device=device)
+                for k in range(n_quad):
+                    dyn_k = compute_dynamics_with_A(
+                        x_eval[k], A, all_possible_edges_gpu, N, device
+                    )  # [N,3]
+                    integral += quad_weights[k] * dyn_k
+                integral = integral * t_half  # scale by (t2 - t1) / 2
+
+                # Left-hand side: x(t2) - x(t1)
+                x1_flat = net(
+                    torch.tensor([[t1]], dtype=torch.float32, device=device),
+                    normalize=True,
+                )  # [1,3N]
+                x2_flat = net(
+                    torch.tensor([[t2]], dtype=torch.float32, device=device),
+                    normalize=True,
+                )  # [1,3N]
+                lhs = flat_to_xyz_torch(x2_flat - x1_flat, N).squeeze(0)
+
+                physics_losses.append(torch.mean((lhs - integral) ** 2))
+
+            loss_phys = (
+                torch.mean(torch.stack(physics_losses)) if physics_losses else torch.tensor(0.0, device=device)
+            )
+        else:
+            loss_phys = torch.tensor(0.0, device=device)
+
+        if epoch < stage1_epochs:
+            phys_weight = 0.0
+        elif physics_ramp_epochs <= 0:
+            phys_weight = lambda_phys
+        else:
+            ramp_progress = min(1.0, (epoch - stage1_epochs) / float(physics_ramp_epochs))
+            phys_weight = lambda_phys * ramp_progress
+
+        total_loss = loss_data + phys_weight * loss_phys
         total_loss.backward()
-        optimizer.step()
-        
+        optimizer_joint.step()
+
         with torch.no_grad():
             A.clamp_(-2.0, 2.0)
-        
+
         A_np = A.detach().cpu().numpy().flatten()
-        pbar.set_postfix({
-            'loss': f'{total_loss.item():.6f}',
-            'A_min': f'{A_np.min():.3f}',
-            'A_max': f'{A_np.max():.3f}',
-            'A_mean': f'{A_np.mean():.3f}'
-        })
-        
+        pbar.set_postfix(
+            {
+                'loss': f'{total_loss.item():.6f}',
+                'L_data': f'{loss_data.item():.3e}',
+                'L_phys': f'{loss_phys.item():.3e}',
+                'W_phys': f'{phys_weight:.3f}',
+                'A_min': f'{A_np.min():.3f}',
+                'A_max': f'{A_np.max():.3f}',
+            }
+        )
+
+        # Periodic AUC evaluation
         if (epoch + 1) % 500 == 0:
             print(f"\n\n{'='*60}")
             print(f"Epoch {epoch+1}/{n_epochs} - AUC Evaluation")
             print('='*60)
             A_current = A.detach().cpu().numpy()
             auc_scores, _ = compute_auc_scores(A_current, edge_config, N, max_order)
-            
+
             all_possible = generate_all_possible_hyperedges(N, max_order)
             A_flat = A_current.flatten()
             A_idx = 0
-            
-            for order_name, order_label in zip(['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs'],
-                                               ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']):
+
+            for order_name, order_label in zip(
+                ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs'],
+                ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges'],
+            ):
                 if order_label not in auc_scores:
                     continue
-                    
+
                 possible_edges = all_possible[order_name]
                 true_edges = edge_config[order_name]
                 n_possible = len(possible_edges)
                 n_true = len(true_edges)
-                
-                A_order = A_flat[A_idx:A_idx+n_possible]
+
+                A_order = A_flat[A_idx : A_idx + n_possible]
                 A_idx += n_possible
-                
+
                 auc_score = auc_scores[order_label]
                 if auc_score is not None:
-                    print(f"  {order_label}: AUC = {auc_score:.4f} | Possible={n_possible}, True={n_true} | A range=[{A_order.min():.3f}, {A_order.max():.3f}]")
+                    print(
+                        f"  {order_label}: AUC = {auc_score:.4f} | Possible={n_possible}, "
+                        f"True={n_true} | A range=[{A_order.min():.3f}, {A_order.max():.3f}]"
+                    )
                 else:
-                    print(f"  {order_label}: N/A | Possible={n_possible}, True={n_true}")
+                    print(
+                        f"  {order_label}: N/A | Possible={n_possible}, True={n_true}"
+                    )
             print('='*60 + '\n')
-    
+
+            save_comparison_plot(epoch_label=epoch + 1)
+
+    # After training: final comparison plot
+    x_pred_data = save_comparison_plot()
+
+    # Fitting error on observation points
+    errors_fitting = np.abs(x_pred_data - x_data)
+    print(f"\nResNet fitting error on original {n_times} points:")
+    print(f"  Mean absolute error: {errors_fitting.mean():.6f}")
+    print(f"  Max absolute error: {errors_fitting.max():.6f}")
+    print(f"  Std of error: {errors_fitting.std():.6f}")
+
     return A.detach().cpu().numpy(), edge_config, save_dir
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Rossler Integral Model with Hypergraph Topology Learning')
-    parser.add_argument('--n_samples', type=int, default=300, 
-                        help='Number of time samples from ODE solver (default: 300)')
-    parser.add_argument('--n_epochs', type=int, default=20000,
-                        help='Number of training epochs (default: 20000)')
-    parser.add_argument('--lr', type=float, default=0.01,
-                        help='Learning rate (default: 0.01)')
-    parser.add_argument('--gpu_id', type=int, default=6,
-                        help='GPU device ID (default: 6)')
-    parser.add_argument('--noise', type=float, default=0.01,
-                        help='Noise level to add to training data (default: 0.0)')
+    parser.add_argument('--n_samples', type=int, default=300)
+    parser.add_argument('--n_epochs', type=int, default=20000)
+    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--gpu_id', type=int, default=6)
+    parser.add_argument('--noise', type=float, default=0.01)
     args = parser.parse_args()
     
     N = 8
@@ -948,7 +1099,7 @@ if __name__ == "__main__":
         batch_size=32,
         gpu_id=args.gpu_id,
         use_nn=True,
-        stage1_epochs=10000,
+        stage1_epochs=2500,
         resample_factor=10,
         n_samples=args.n_samples,
         noise=args.noise
@@ -963,8 +1114,6 @@ if __name__ == "__main__":
             print(f"  {order_label}: {auc_score:.4f}")
         else:
             print(f"  {order_label}: N/A (no positive/negative samples)")
-    
-    np.save(f"{save_dir}/A_learned.npy", A_learned)
     
     with open(f"{save_dir}/auc_scores.txt", 'w') as f:
         f.write(f"N={N}, max_order={max_order}, n_samples={args.n_samples}, noise={args.noise}\n")

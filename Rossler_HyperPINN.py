@@ -112,7 +112,7 @@ parser.add_argument('--tmax', type=float, default=20)
 parser.add_argument('--N', type=int, default=8)
 parser.add_argument('--max_order', type=int, default=7)
 parser.add_argument('--gpu_id', type=int, default=4)
-parser.add_argument('--noise', type=float, default=0.05)
+parser.add_argument('--noise', type=float, default=0.0)
 args = parser.parse_args()
 
 N = args.N
@@ -206,7 +206,6 @@ dt = tmax / M
 t_eval = np.linspace(0, tmax, M+1)
 t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1)
 
-# Match data generation logic with Rossler_Integral_linear.py
 np.random.seed(42)
 x0 = np.random.uniform(-1, 1, size=(3 * N,))
 sol = solve_ivp(
@@ -225,7 +224,6 @@ dxdt = np.array(
     ]
 )
 
-# Add Gaussian noise in the same way as in Rossler_Integral_linear.py
 if noise > 0:
     np.random.seed()
     X_noisy = X + np.random.randn(*X.shape) * noise
@@ -240,7 +238,6 @@ architectures = [
     ("Pirate", False, False, True),
 ]
 
-# Calculate flexible grid size
 n_cols = 4
 n_rows = int(np.ceil(N / n_cols))
 plt.figure(figsize=(4*n_cols, 3*n_rows))
@@ -260,7 +257,6 @@ for i in range(N):
     plt.legend()
     plt.grid(True)
 plt.tight_layout()
-# create results folder for this run (similar style to Rossler_Integral_linear.py)
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 results_dir = os.path.join(
     'results_hyperpinn',
@@ -332,7 +328,6 @@ def _save_true_hyperedge_figures(
 
 _save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges, true_6edges, true_7edges)
 
-# Setup device
 if gpu_id is not None and gpu_id >= 0 and torch.cuda.is_available():
     device = torch.device(f'cuda:{gpu_id}')
     print(f"Using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
@@ -369,8 +364,8 @@ model.lambda_l0_septs = 0.005
 optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
 losses = []
 sparsity_stats = []
-t_data = t_data.float().to(device)  # Move to GPU
-x_data = x_data.float().to(device)  # Move to GPU
+t_data = t_data.float().to(device)
+x_data = x_data.float().to(device)
 
 epochs = 14000
 stage1_epochs = 2500   

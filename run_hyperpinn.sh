@@ -4,9 +4,9 @@ M=300
 tmax=20
 N=8
 max_order=7
-gpu_id=5
+gpu_id=1
 
-for noise in 0.05
+for noise in 0.2
 do
     echo "======================================="
     echo "Running HyperPINN with noise = $noise"
