@@ -8,13 +8,7 @@ from datetime import datetime
 from tqdm import tqdm
 import argparse
 
-from lib_rossler_oscillator.hypergraph import (
-    roessler_dynamics,
-    compute_hyperedge_coupling_tensor,
-    get_hyperedge_config,
-    generate_all_possible_hyperedges,
-    generate_training_data,
-)
+from lib_rossler_oscillator.hypergraph import HypergraphModel
 
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.0):
@@ -158,9 +152,9 @@ def plot_roc_curves(roc_data, auc_scores, save_dir):
     plt.yticks(fontsize=12)
     plt.grid(True, alpha=0.3)
     
-    plt.savefig(os.path.join(save_dir, 'roc_curves_7_order.png'), bbox_inches='tight', dpi=300)
+    plt.savefig(os.path.join(save_dir, f'roc_curves_{max_order}_order.png'), bbox_inches='tight', dpi=300)
     plt.close()
-    print(f"ROC curves saved to {os.path.join(save_dir, 'roc_curves_7_order.png')}")
+    print(f"ROC curves saved to {os.path.join(save_dir, f'roc_curves_{max_order}_order.png')}")
 
 
 def train_integral_model(
@@ -180,8 +174,8 @@ def train_integral_model(
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    edge_config = get_hyperedge_config(N, max_order)
-    all_possible_edges = generate_all_possible_hyperedges(N, max_order)
+    edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
+    all_possible_edges = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
     n_hyperedges = (len(all_possible_edges['edges']) + 
                     len(all_possible_edges['triangles']) + 
                     len(all_possible_edges['quads']) + 
@@ -205,7 +199,7 @@ def train_integral_model(
     print(f"  7-edges: {len(edge_config['septs'])}")
     
     print("\nGenerating training data...")
-    t_data, x_data = generate_training_data(N, edge_config, n_samples, noise=noise)
+    t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise)
     n_times = len(t_data)
     print(f"Data shape: {x_data.shape}, Time points: {n_times}")
     state_dim = x_data.shape[2]
@@ -309,8 +303,10 @@ def train_integral_model(
     
     for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
         x_t = x_data_gpu[t_idx]  # [N, D]
-        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges_gpu, N, device)  # [N, D, n_hyperedges]
-        f_all[t_idx] = roessler_dynamics(x_t, N)
+        Phi_all[t_idx] = HypergraphModel.compute_hyperedge_coupling_tensor(
+            x_t, all_possible_edges_gpu, N, device
+        )  # [N, D, n_hyperedges]
+        f_all[t_idx] = HypergraphModel.roessler_dynamics(x_t, N)
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
@@ -421,8 +417,9 @@ if __name__ == "__main__":
     parser.add_argument('--noise', type=float, default=0.0)
     args = parser.parse_args()
     
-    N = 8
-    max_order = 7
+    defaults = HypergraphModel.get_default_params()
+    N = defaults["n_nodes"]
+    max_order = defaults["max_order"]
     
     A_learned, edge_config, save_dir = train_integral_model(
         N=N, 
