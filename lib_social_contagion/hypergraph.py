@@ -9,15 +9,12 @@ from itertools import combinations
 
 import numpy as np
 import torch
+from scipy.integrate import solve_ivp
 
 
 class HypergraphModel:
     _cached_edges = None
     _cached_triangles = None
-    _state_exposure = None
-    _state_recovery = None
-    _state_device = None
-    _state_dtype = None
 
     @dataclass
     class RSCParams:
@@ -29,35 +26,13 @@ class HypergraphModel:
 
     @dataclass
     class SCMParams:
-        beta: float = 0.05
-        beta_delta: float = 0.2
-        mu: float = 0.1
-        rho0: float = 0.5
-        infect_threshold: float = 1.0
-        state_threshold: float = 0.5
-        t_max: int = 500
+        n_nodes: int = 2000
+        t_max: float = 50.0
+        beta: float = 0.5
+        beta_delta: float = 2.0
+        mu: float = 0.4
         seed: int = 123
 
-    @staticmethod
-    def reset_internal_state() -> None:
-        HypergraphModel._state_exposure = None
-        HypergraphModel._state_recovery = None
-        HypergraphModel._state_device = None
-        HypergraphModel._state_dtype = None
-
-    @staticmethod
-    def _ensure_state(n_nodes: int, device: torch.device, dtype: torch.dtype) -> None:
-        if (
-            HypergraphModel._state_exposure is None
-            or HypergraphModel._state_recovery is None
-            or HypergraphModel._state_exposure.numel() != n_nodes
-            or HypergraphModel._state_device != device
-            or HypergraphModel._state_dtype != dtype
-        ):
-            HypergraphModel._state_exposure = torch.zeros(n_nodes, device=device, dtype=dtype)
-            HypergraphModel._state_recovery = torch.zeros(n_nodes, device=device, dtype=dtype)
-            HypergraphModel._state_device = device
-            HypergraphModel._state_dtype = dtype
 
     @staticmethod
     def _rsc_probabilities(n_nodes: int, k_mean: float, k_delta: float) -> tuple[float, float]:
@@ -185,94 +160,118 @@ class HypergraphModel:
         return edges, triangles
 
     @staticmethod
-    def _build_complex_dict(n_nodes: int, edges: list[list[int]], triangles: list[list[int]]) -> dict:
+    def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 100, noise: float = 0.0):
+        params = HypergraphModel.SCMParams(n_nodes=n_nodes, t_max=50)
+        complex_dict = {
+            "edges": [],
+            "triangles": [],
+            "nodes": np.arange(n_nodes)
+        }
+        
+        if "edges" in edge_config:
+            e_list = edge_config["edges"]
+            if len(e_list) > 0:
+                e_arr = np.array(e_list)
+                if e_arr.min() >= 1:
+                    complex_dict["edges"] = (e_arr - 1).tolist()
+                else:
+                    complex_dict["edges"] = e_list
+                    
+        if "triangles" in edge_config:
+            t_list = edge_config["triangles"]
+            if len(t_list) > 0:
+                t_arr = np.array(t_list)
+                if t_arr.min() >= 1:
+                    complex_dict["triangles"] = (t_arr - 1).tolist()
+                else:
+                    complex_dict["triangles"] = t_list
+
+        result = HypergraphModel._simulate(params, complex_dict, n_steps=n_samples)
+        HypergraphModel._cached_edges = complex_dict["edges"]
+        HypergraphModel._cached_triangles = complex_dict["triangles"]
+
+        t = result["t"]
+        x_observed = result["X_observed"].T[:, :, None]
+        if x_observed.shape[0] != n_samples:
+             indices = np.linspace(0, x_observed.shape[0]-1, n_samples).astype(int)
+             x_observed = x_observed[indices]
+             t = np.linspace(0, params.t_max, n_samples)
+        if noise > 0:
+             x_observed = x_observed + np.random.randn(*x_observed.shape) * noise
+
+        return t, x_observed
+
+    @staticmethod
+    def _rhs(
+        t: float,
+        x: np.ndarray,
+        edges: list[list[int]],
+        triangles: list[list[int]],
+        params: "HypergraphModel.SCMParams",
+    ) -> np.ndarray:
+        
+        n_nodes = x.shape[0]
+        infection_force = np.zeros(n_nodes)
+
+        # Pairwise force
+        if edges:
+            for i, j in edges:
+                infection_force[i] += params.beta * x[j]
+                infection_force[j] += params.beta * x[i]
+
+        if triangles:
+            for i, j, k in triangles:
+                infection_force[i] += params.beta_delta * (x[j] * x[k])
+                infection_force[j] += params.beta_delta * (x[i] * x[k])
+                infection_force[k] += params.beta_delta * (x[i] * x[j])
+
+        dx = -params.mu * x + (1.0 - x) * infection_force
+        return dx
+
+    @staticmethod
+    def _simulate(params: "HypergraphModel.SCMParams", complex_dict: dict, n_steps: int = 100):
+        rng = np.random.default_rng(params.seed)
+        
+        # Initial condition: Fraction of infected people (continuous probability [0,1])
+        # Start with a small random seed of infection
+        x0 = rng.uniform(0.0, 0.1, size=params.n_nodes)
+        
+        # Ensure at least some infection to start dynamics
+        seeds = rng.choice(params.n_nodes, size=max(1, int(0.1 * params.n_nodes)), replace=False)
+        x0[seeds] = rng.uniform(0.2, 0.5, size=len(seeds))
+
+        t_eval = np.linspace(0, params.t_max, n_steps) # n_steps for integration
+
+        edges = complex_dict["edges"]
+        triangles = complex_dict["triangles"]
+
+        sol = solve_ivp(
+            fun=lambda t, x: HypergraphModel._rhs(t, x, edges, triangles, params),
+            t_span=(0, params.t_max),
+            y0=x0,
+            t_eval=t_eval,
+            method="RK45",
+            rtol=1e-6,
+            atol=1e-8,
+        )
+        
+        X_continuous = np.clip(sol.y, 0.0, 1.0) # Probability x in [0,1]
+        X_observed = rng.binomial(1, X_continuous).astype(float)
+
         return {
-            "nodes": np.arange(n_nodes, dtype=int),
-            "edges": edges,
-            "triangles": triangles,
+            "t": sol.t,
+            "X_continuous": X_continuous, # Truth (Probability)
+            "X_observed": X_observed,     # Observation (Binary)
+            "x0": x0,
+            **complex_dict
         }
 
     @staticmethod
-    def _as_infected_mask(x_vec: torch.Tensor, threshold: float) -> torch.Tensor:
-        return x_vec >= threshold
-
-    @staticmethod
-    def _exposure_increment_numpy(
-        infected: np.ndarray,
-        edges: list[list[int]],
-        triangles: list[list[int]],
-        beta: float,
-        beta_delta: float,
-        n_nodes: int,
-    ) -> np.ndarray:
-        exposure_inc = np.zeros(n_nodes, dtype=float)
-
-        if edges:
-            for i, j in edges:
-                if infected[j]:
-                    exposure_inc[i] += 1.0
-                if infected[i]:
-                    exposure_inc[j] += 1.0
-            exposure_inc *= beta
-
-        if triangles:
-            tri_inc = np.zeros(n_nodes, dtype=float)
-            for i, j, k in triangles:
-                if infected[j] and infected[k]:
-                    tri_inc[i] += 1.0
-                if infected[i] and infected[k]:
-                    tri_inc[j] += 1.0
-                if infected[i] and infected[j]:
-                    tri_inc[k] += 1.0
-            exposure_inc += tri_inc * beta_delta
-
-        return exposure_inc
-
-    @staticmethod
-    def _exposure_increment_torch(
-        infected: torch.Tensor,
-        edges: list | torch.Tensor,
-        triangles: list | torch.Tensor,
-        beta: float,
-        beta_delta: float,
-        n_nodes: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        exposure_inc = torch.zeros(n_nodes, device=device, dtype=dtype)
-
-        if isinstance(edges, list):
-            edges_t = torch.as_tensor(edges, dtype=torch.long, device=device)
-        else:
-            edges_t = edges
-
-        if edges_t.numel() > 0:
-            i_idx = edges_t[:, 0]
-            j_idx = edges_t[:, 1]
-            exposure_inc.index_add_(0, i_idx, infected[j_idx].to(dtype))
-            exposure_inc.index_add_(0, j_idx, infected[i_idx].to(dtype))
-            exposure_inc = exposure_inc * beta
-
-        if isinstance(triangles, list):
-            tri_t = torch.as_tensor(triangles, dtype=torch.long, device=device)
-        else:
-            tri_t = triangles
-
-        if tri_t.numel() > 0:
-            i_idx = tri_t[:, 0]
-            j_idx = tri_t[:, 1]
-            k_idx = tri_t[:, 2]
-            tri_inc = torch.zeros(n_nodes, device=device, dtype=dtype)
-            tri_inc.index_add_(0, i_idx, (infected[j_idx] & infected[k_idx]).to(dtype))
-            tri_inc.index_add_(0, j_idx, (infected[i_idx] & infected[k_idx]).to(dtype))
-            tri_inc.index_add_(0, k_idx, (infected[i_idx] & infected[j_idx]).to(dtype))
-            exposure_inc = exposure_inc + tri_inc * beta_delta
-
-        return exposure_inc
-
-    @staticmethod
     def dynamic_f(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+        # The drift part of the ODE: f(x) = -mu * x
+        # This is the part INDEPENDENT of the unknown structure
         params = HypergraphModel.SCMParams()
+        
         if x.ndim == 1:
             x_vec = x
             out_shape = None
@@ -280,33 +279,10 @@ class HypergraphModel:
             x_vec = x[:, 0]
             out_shape = x.shape
 
-        if x_vec.numel() != n_nodes:
-            raise ValueError(f"n_nodes mismatch: got {n_nodes}, but x has {x_vec.numel()} entries")
-
-        HypergraphModel._ensure_state(n_nodes, x_vec.device, x_vec.dtype)
-
-        infected = x_vec >= params.state_threshold
-        exposure = HypergraphModel._state_exposure
-        recovery = HypergraphModel._state_recovery
-
-        recovery[infected] = recovery[infected] + params.mu
-        recovered = recovery >= 1.0
-
-        next_infected = infected.clone()
-        next_infected[recovered] = False
-        recovery[recovered] = 0.0
-
-        susceptible = ~infected
-        new_infected = susceptible & (exposure >= params.infect_threshold)
-        next_infected[new_infected] = True
-
-        exposure[infected | new_infected] = 0.0
-
-        dx = next_infected.to(x_vec.dtype) - infected.to(x_vec.dtype)
+        dx = -params.mu * x_vec
 
         if out_shape is not None:
             return dx.view(out_shape)
-
         return dx
 
     @staticmethod
@@ -316,65 +292,69 @@ class HypergraphModel:
         n_nodes: int,
         device: torch.device,
     ) -> torch.Tensor:
+        # The interaction part: Phi(x) * A
+        # For each candidate edge/triangle, compute its contribution term
+        # Term = (1 - x_i) * force
+        
         params = HypergraphModel.SCMParams()
         n_total = 0
         for key in ["edges", "triangles"]:
             n_total += len(all_possible_edges.get(key, []))
+
         if x.ndim == 1:
             x_vec = x
+            d = 1
         else:
             x_vec = x[:, 0]
+            d = x.shape[1]
 
-        infected = HypergraphModel._as_infected_mask(x_vec, params.state_threshold)
-        HypergraphModel._ensure_state(n_nodes, device, x_vec.dtype)
-
-        phi = torch.zeros((n_nodes, 1, n_total), device=device)
+        # Precompute (1-x)
+        susceptible = 1.0 - x_vec
+        
+        # Phi shape: (N_nodes, Dimension_of_states, N_candidates)
+        # Here Dimension is 1 (infection probability)
+        Phi = torch.zeros((n_nodes, 1, n_total), device=device, dtype=x.dtype)
         edge_idx = 0
 
+        # 1. Candidate Edges (Pairwise)
         edges = all_possible_edges.get("edges", [])
         if len(edges) > 0:
             edges_t = torch.as_tensor(edges, dtype=torch.long, device=device)
+            num_edges = edges_t.shape[0]
             i_idx = edges_t[:, 0]
             j_idx = edges_t[:, 1]
-            edge_range = edge_idx + torch.arange(edges_t.shape[0], device=device)
-            phi[i_idx, 0, edge_range] = params.beta * infected[j_idx].to(x_vec.dtype)
-            phi[j_idx, 0, edge_range] = params.beta * infected[i_idx].to(x_vec.dtype)
-            edge_idx += edges_t.shape[0]
+            feature_range = edge_idx + torch.arange(num_edges, device=device)
 
+            # Interaction: (1-x_i) * beta * x_j
+            term_i = params.beta * susceptible[i_idx] * x_vec[j_idx]
+            term_j = params.beta * susceptible[j_idx] * x_vec[i_idx]
+            
+            Phi[i_idx, 0, feature_range] = term_i
+            Phi[j_idx, 0, feature_range] = term_j
+            
+            edge_idx += num_edges
+
+        # 2. Candidate Triangles (Simplicial)
         triangles = all_possible_edges.get("triangles", [])
         if len(triangles) > 0:
             tri_t = torch.as_tensor(triangles, dtype=torch.long, device=device)
+            num_tris = tri_t.shape[0]
             i_idx = tri_t[:, 0]
             j_idx = tri_t[:, 1]
             k_idx = tri_t[:, 2]
-            edge_range = edge_idx + torch.arange(tri_t.shape[0], device=device)
-            tri_active = (infected[j_idx] & infected[k_idx]).to(x_vec.dtype)
-            phi[i_idx, 0, edge_range] = params.beta_delta * tri_active
-            tri_active = (infected[i_idx] & infected[k_idx]).to(x_vec.dtype)
-            phi[j_idx, 0, edge_range] = params.beta_delta * tri_active
-            tri_active = (infected[i_idx] & infected[j_idx]).to(x_vec.dtype)
-            phi[k_idx, 0, edge_range] = params.beta_delta * tri_active
-            edge_idx += tri_t.shape[0]
+            feature_range = edge_idx + torch.arange(num_tris, device=device)
 
-        edges_cached = HypergraphModel._cached_edges or []
-        triangles_cached = HypergraphModel._cached_triangles or []
-        if edges_cached or triangles_cached:
-            susceptible = ~infected
-            exposure_inc = HypergraphModel._exposure_increment_torch(
-                infected,
-                edges_cached,
-                triangles_cached,
-                params.beta,
-                params.beta_delta,
-                n_nodes,
-                device,
-                x_vec.dtype,
-            )
-            HypergraphModel._state_exposure[susceptible] = (
-                HypergraphModel._state_exposure[susceptible] + exposure_inc[susceptible]
-            )
+            term_i = params.beta_delta * susceptible[i_idx] * (x_vec[j_idx] * x_vec[k_idx])
+            term_j = params.beta_delta * susceptible[j_idx] * (x_vec[i_idx] * x_vec[k_idx])
+            term_k = params.beta_delta * susceptible[k_idx] * (x_vec[i_idx] * x_vec[j_idx])
 
-        return phi
+            Phi[i_idx, 0, feature_range] = term_i
+            Phi[j_idx, 0, feature_range] = term_j
+            Phi[k_idx, 0, feature_range] = term_k
+            
+            edge_idx += num_tris
+
+        return Phi
 
     @staticmethod
     def get_hyperedge_config(
@@ -432,56 +412,6 @@ class HypergraphModel:
 
         return all_possible
 
-    @staticmethod
-    def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
-        edges, triangles = HypergraphModel._edge_config_to_zero_based(edge_config)
-        HypergraphModel._cache_hyperedges(edges, triangles)
-        params = HypergraphModel.SCMParams(t_max=max(1, n_samples - 1))
-
-        infected = np.random.default_rng(params.seed).random(n_nodes) < params.rho0
-        exposure = np.zeros(n_nodes, dtype=float)
-        recovery = np.zeros(n_nodes, dtype=float)
-
-        states = np.zeros((params.t_max + 1, n_nodes), dtype=np.uint8)
-        states[0] = infected.astype(np.uint8)
-
-        for t_idx in range(1, params.t_max + 1):
-            next_infected = infected.copy()
-
-            for i in range(n_nodes):
-                if infected[i]:
-                    recovery[i] += params.mu
-                    if recovery[i] >= 1.0:
-                        next_infected[i] = False
-                        recovery[i] = 0.0
-                    exposure[i] = 0.0
-                    continue
-
-            exposure_inc = HypergraphModel._exposure_increment_numpy(
-                infected,
-                edges,
-                triangles,
-                params.beta,
-                params.beta_delta,
-                n_nodes,
-            )
-            exposure[~infected] = exposure[~infected] + exposure_inc[~infected]
-
-            new_infected = (~infected) & (exposure >= params.infect_threshold)
-            next_infected[new_infected] = True
-            exposure[new_infected] = 0.0
-
-            infected = next_infected
-            states[t_idx] = infected.astype(np.uint8)
-
-        states = states.astype(float)
-        t = np.arange(states.shape[0], dtype=float)
-
-        if noise > 0:
-            states = states + np.random.randn(*states.shape) * noise
-
-        x_data = states[:, :, None]
-        return t, x_data
 
     @staticmethod
     def get_default_params() -> dict:
