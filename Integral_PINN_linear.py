@@ -7,9 +7,12 @@ import os
 from datetime import datetime
 from tqdm import tqdm
 import argparse
+import inspect
 
-from lib_rossler_oscillator.hypergraph import HypergraphModel
-
+# from lib_rossler_oscillator.hypergraph import HypergraphModel
+# from lib_ecological_dynamics.hypergraph import HypergraphModel
+# from lib_neuronal_synchronization.hypergraph import HypergraphModel
+from lib_social_contagion.hypergraph import HypergraphModel
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.0):
         super().__init__()
@@ -76,8 +79,8 @@ def compute_auc_scores(A_learned, edge_config, N, max_order):
             break
         
         # Get all possible hyperedges and true hyperedges
-        possible_edges = all_possible[order_name]
-        true_edges = edge_config[order_name]
+        possible_edges = all_possible.get(order_name, [])
+        true_edges = edge_config.get(order_name, [])
         
         if len(possible_edges) == 0:
             continue
@@ -132,7 +135,6 @@ def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
         '7-edges': 'brown'
     }
     
-    # Plot ROC curve for each order
     for order_label in ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']:
         if order_label in roc_data and roc_data[order_label] is not None:
             fpr, tpr = roc_data[order_label]
@@ -172,27 +174,31 @@ def train_integral_model(
     print(f"Using device: {device}")
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
     all_possible_edges = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
-    n_hyperedges = (len(all_possible_edges['edges']) + 
-                    len(all_possible_edges['triangles']) + 
-                    len(all_possible_edges['quads']) + 
-                    len(all_possible_edges['quints']) + 
-                    len(all_possible_edges['sexts']) + 
-                    len(all_possible_edges['septs']))
+    order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
+    order_sizes = {
+        'edges': 2,
+        'triangles': 3,
+        'quads': 4,
+        'quints': 5,
+        'sexts': 6,
+        'septs': 7,
+    }
+    n_hyperedges = sum(len(all_possible_edges.get(key, [])) for key in order_keys)
     print(f"N={N}, max_order={max_order}")
     print(f"Total possible hyperedges={n_hyperedges}")
-    print(f"  2-edges: {len(all_possible_edges['edges'])}")
-    print(f"  3-edges: {len(all_possible_edges['triangles'])}")
-    print(f"  4-edges: {len(all_possible_edges['quads'])}")
-    print(f"  5-edges: {len(all_possible_edges['quints'])}")
-    print(f"  6-edges: {len(all_possible_edges['sexts'])}")
-    print(f"  7-edges: {len(all_possible_edges['septs'])}")
+    print(f"  2-edges: {len(all_possible_edges.get('edges', []))}")
+    print(f"  3-edges: {len(all_possible_edges.get('triangles', []))}")
+    print(f"  4-edges: {len(all_possible_edges.get('quads', []))}")
+    print(f"  5-edges: {len(all_possible_edges.get('quints', []))}")
+    print(f"  6-edges: {len(all_possible_edges.get('sexts', []))}")
+    print(f"  7-edges: {len(all_possible_edges.get('septs', []))}")
     print(f"\nTrue hyperedges:")
-    print(f"  2-edges: {len(edge_config['edges'])}")
-    print(f"  3-edges: {len(edge_config['triangles'])}")
-    print(f"  4-edges: {len(edge_config['quads'])}")
-    print(f"  5-edges: {len(edge_config['quints'])}")
-    print(f"  6-edges: {len(edge_config['sexts'])}")
-    print(f"  7-edges: {len(edge_config['septs'])}")
+    print(f"  2-edges: {len(edge_config.get('edges', []))}")
+    print(f"  3-edges: {len(edge_config.get('triangles', []))}")
+    print(f"  4-edges: {len(edge_config.get('quads', []))}")
+    print(f"  5-edges: {len(edge_config.get('quints', []))}")
+    print(f"  6-edges: {len(edge_config.get('sexts', []))}")
+    print(f"  7-edges: {len(edge_config.get('septs', []))}")
     
     print("\nGenerating training data...")
     t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise)
@@ -287,33 +293,39 @@ def train_integral_model(
     x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)
     print("Converting hyperedge indices to GPU tensors...")
     all_possible_edges_gpu = {}
-    for key in ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']:
-        if len(all_possible_edges[key]) > 0:
-            all_possible_edges_gpu[key] = torch.tensor(all_possible_edges[key], dtype=torch.long, device=device) - 1
+    for key in order_keys:
+        edges = all_possible_edges.get(key, [])
+        if len(edges) > 0:
+            all_possible_edges_gpu[key] = torch.tensor(edges, dtype=torch.long, device=device) - 1
         else:
-            all_possible_edges_gpu[key] = torch.empty((0, len(all_possible_edges[key][0]) if all_possible_edges[key] else 2), dtype=torch.long, device=device)
+            all_possible_edges_gpu[key] = torch.empty((0, order_sizes[key]), dtype=torch.long, device=device)
     
     print("Pre-computing coupling tensor Phi and basic dynamics f for all time points...")
     Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
     f_all = torch.zeros((n_times, N, state_dim), device=device)
+    dynamic_params = inspect.signature(HypergraphModel.dynamic_f).parameters
+    dynamic_accepts_time = len(dynamic_params) >= 3
     
     for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-        x_t = x_data_gpu[t_idx]  # [N, D]
-        Phi_all[t_idx] = HypergraphModel.compute_hyperedge_coupling_tensor(
+        x_t = x_data_gpu[t_idx]
+        Phi_all[t_idx] = HypergraphModel.dynamic_phi(
             x_t, all_possible_edges_gpu, N, device
-        )  # [N, D, n_hyperedges]
-        f_all[t_idx] = HypergraphModel.dynamic(x_t, N)
+        )
+        if dynamic_accepts_time:
+            f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N, t_data_gpu[t_idx])
+        else:
+            f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N)
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
     A = torch.randn(n_hyperedges, 1, device=device)
     A_idx = 0
-    n_edges = len(all_possible_edges['edges'])
-    n_triangles = len(all_possible_edges['triangles'])
-    n_quads = len(all_possible_edges['quads'])
-    n_quints = len(all_possible_edges['quints'])
-    n_sexts = len(all_possible_edges['sexts'])
-    n_septs = len(all_possible_edges['septs'])
+    n_edges = len(all_possible_edges.get('edges', []))
+    n_triangles = len(all_possible_edges.get('triangles', []))
+    n_quads = len(all_possible_edges.get('quads', []))
+    n_quints = len(all_possible_edges.get('quints', []))
+    n_sexts = len(all_possible_edges.get('sexts', []))
+    n_septs = len(all_possible_edges.get('septs', []))
     
     if n_edges > 0:
         A[A_idx:A_idx+n_edges] -= 2.0
@@ -382,8 +394,8 @@ def train_integral_model(
                 if order_label not in auc_scores:
                     continue
                     
-                possible_edges = all_possible[order_name]
-                true_edges = edge_config[order_name]
+                possible_edges = all_possible.get(order_name, [])
+                true_edges = edge_config.get(order_name, [])
                 n_possible = len(possible_edges)
                 n_true = len(true_edges)
                 

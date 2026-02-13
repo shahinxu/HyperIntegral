@@ -14,6 +14,8 @@ from scipy.integrate import solve_ivp
 class HypergraphModel:
     _cached_omega = None
     _cached_nu = None
+    _cached_edges = None
+    _cached_triangles = None
 
     @dataclass
     class SimplicialParams:
@@ -28,10 +30,46 @@ class HypergraphModel:
         t_span: tuple = (0.0, 120.0)
         n_steps: int = 2000
         seed: int = 42
+        target_incidence_per_node_order2: int = 2
+        target_incidence_per_node_order3: int = 1
 
     @staticmethod
     def _wrap_to_pi(x: np.ndarray) -> np.ndarray:
         return (x + np.pi) % (2.0 * np.pi) - np.pi
+
+    @staticmethod
+    def _sample_sparse_hyperedges(
+        n: int,
+        order: int,
+        target_incidence_per_node: int,
+        rng: np.random.Generator,
+    ):
+        candidates = list(combinations(range(1, n + 1), order))
+        if not candidates:
+            return []
+
+        m_target = max(n // 2, int(round(n * target_incidence_per_node / order)))
+        m_target = min(m_target, len(candidates))
+
+        picked_idx = set(rng.choice(len(candidates), size=m_target, replace=False).tolist())
+
+        node_cover = {i: 0 for i in range(1, n + 1)}
+        for idx in picked_idx:
+            for node in candidates[idx]:
+                node_cover[node] += 1
+
+        for node in range(1, n + 1):
+            if node_cover[node] > 0:
+                continue
+            contain_node = [i for i, e in enumerate(candidates) if node in e]
+            if not contain_node:
+                continue
+            add_idx = int(rng.choice(contain_node))
+            picked_idx.add(add_idx)
+            for u in candidates[add_idx]:
+                node_cover[u] += 1
+
+        return [list(candidates[i]) for i in sorted(picked_idx)]
 
     @staticmethod
     def _kuramoto_pairwise_term(phi: np.ndarray) -> np.ndarray:
@@ -39,15 +77,32 @@ class HypergraphModel:
         return np.sin(diff).mean(axis=1)
 
     @staticmethod
-    def _rhs(t: float, y: np.ndarray, omega: np.ndarray, nu: np.ndarray, p: "HypergraphModel.SimplicialParams"):
+    def _rhs(
+        t: float,
+        y: np.ndarray,
+        omega: np.ndarray,
+        nu: np.ndarray,
+        p: "HypergraphModel.SimplicialParams",
+        edges: np.ndarray,
+        triangles: np.ndarray,
+    ):
         n = p.n_oscillators
         theta = y[:n]
         phi = y[n:]
 
-        z1 = np.exp(1j * theta).mean()
-        simplex_term = p.K * np.imag((z1 ** 2) * np.exp(-2j * theta))
+        pairwise_term = np.zeros(n)
+        if edges.size > 0:
+            for i_idx, j_idx in edges:
+                pairwise_term[i_idx] += (p.kappa / n) * np.sin(phi[j_idx] - phi[i_idx])
+                pairwise_term[j_idx] += (p.kappa / n) * np.sin(phi[i_idx] - phi[j_idx])
 
-        pairwise_term = p.kappa * HypergraphModel._kuramoto_pairwise_term(phi)
+        simplex_term = np.zeros(n)
+        if triangles.size > 0:
+            for i_idx, j_idx, k_idx in triangles:
+                simplex_term[i_idx] += (p.K / (n ** 2)) * np.sin(theta[j_idx] + theta[k_idx] - 2 * theta[i_idx])
+                simplex_term[j_idx] += (p.K / (n ** 2)) * np.sin(theta[i_idx] + theta[k_idx] - 2 * theta[j_idx])
+                simplex_term[k_idx] += (p.K / (n ** 2)) * np.sin(theta[i_idx] + theta[j_idx] - 2 * theta[k_idx])
+
         drive_term = p.d * np.sin(theta - phi)
 
         theta_dot = omega + simplex_term
@@ -56,7 +111,11 @@ class HypergraphModel:
         return np.concatenate([theta_dot, phi_dot])
 
     @staticmethod
-    def _simulate(params: "HypergraphModel.SimplicialParams"):
+    def _simulate(
+        params: "HypergraphModel.SimplicialParams",
+        edges: np.ndarray,
+        triangles: np.ndarray,
+    ):
         rng = np.random.default_rng(params.seed)
 
         omega = rng.normal(params.omega_mean, params.omega_std, params.n_oscillators)
@@ -69,7 +128,7 @@ class HypergraphModel:
         t_eval = np.linspace(params.t_span[0], params.t_span[1], params.n_steps)
 
         sol = solve_ivp(
-            fun=lambda t, y: HypergraphModel._rhs(t, y, omega, nu, params),
+            fun=lambda t, y: HypergraphModel._rhs(t, y, omega, nu, params, edges, triangles),
             t_span=params.t_span,
             y0=y0,
             t_eval=t_eval,
@@ -98,7 +157,7 @@ class HypergraphModel:
         return out
 
     @staticmethod
-    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    def dynamic_f(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
         params = HypergraphModel.SimplicialParams(n_oscillators=n_nodes)
         theta = x[:, 0]
         phi = x[:, 1]
@@ -110,11 +169,31 @@ class HypergraphModel:
             omega = torch.as_tensor(HypergraphModel._cached_omega, device=x.device, dtype=x.dtype)
             nu = torch.as_tensor(HypergraphModel._cached_nu, device=x.device, dtype=x.dtype)
 
-        z1 = torch.exp(1j * theta).mean()
-        simplex_term = params.K * torch.imag((z1 ** 2) * torch.exp(-2j * theta))
+        pairwise_term = torch.zeros(n_nodes, device=x.device, dtype=x.dtype)
+        edges = HypergraphModel._cached_edges
+        if edges is not None and len(edges) > 0:
+            edges_t = torch.as_tensor(edges, device=x.device, dtype=torch.long)
+            i_idx = edges_t[:, 0]
+            j_idx = edges_t[:, 1]
+            term_ij = (params.kappa / n_nodes) * torch.sin(phi[j_idx] - phi[i_idx])
+            term_ji = (params.kappa / n_nodes) * torch.sin(phi[i_idx] - phi[j_idx])
+            pairwise_term.index_add_(0, i_idx, term_ij)
+            pairwise_term.index_add_(0, j_idx, term_ji)
 
-        diff = phi[None, :] - phi[:, None]
-        pairwise_term = params.kappa * torch.sin(diff).mean(dim=1)
+        simplex_term = torch.zeros(n_nodes, device=x.device, dtype=x.dtype)
+        triangles = HypergraphModel._cached_triangles
+        if triangles is not None and len(triangles) > 0:
+            tri_t = torch.as_tensor(triangles, device=x.device, dtype=torch.long)
+            i_idx = tri_t[:, 0]
+            j_idx = tri_t[:, 1]
+            k_idx = tri_t[:, 2]
+            term_i = (params.K / (n_nodes ** 2)) * torch.sin(theta[j_idx] + theta[k_idx] - 2 * theta[i_idx])
+            term_j = (params.K / (n_nodes ** 2)) * torch.sin(theta[i_idx] + theta[k_idx] - 2 * theta[j_idx])
+            term_k = (params.K / (n_nodes ** 2)) * torch.sin(theta[i_idx] + theta[j_idx] - 2 * theta[k_idx])
+            simplex_term.index_add_(0, i_idx, term_i)
+            simplex_term.index_add_(0, j_idx, term_j)
+            simplex_term.index_add_(0, k_idx, term_k)
+
         drive_term = params.d * torch.sin(theta - phi)
 
         theta_dot = omega + simplex_term
@@ -123,7 +202,7 @@ class HypergraphModel:
         return torch.stack([theta_dot, phi_dot], dim=1)
 
     @staticmethod
-    def compute_hyperedge_coupling_tensor(
+    def dynamic_phi(
         x: torch.Tensor,
         all_possible_edges: dict,
         n_nodes: int,
@@ -174,8 +253,21 @@ class HypergraphModel:
 
     @staticmethod
     def get_hyperedge_config(n_nodes: int, max_order: int = 3) -> dict:
-        edges = [list(edge) for edge in combinations(range(1, n_nodes + 1), 2)]
-        triangles = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
+        params = HypergraphModel.SimplicialParams(n_oscillators=n_nodes)
+        rng = np.random.default_rng(params.seed)
+
+        edges = HypergraphModel._sample_sparse_hyperedges(
+            n_nodes,
+            2,
+            params.target_incidence_per_node_order2,
+            rng,
+        )
+        triangles = HypergraphModel._sample_sparse_hyperedges(
+            n_nodes,
+            3,
+            params.target_incidence_per_node_order3,
+            rng,
+        )
 
         return {
             "edges": edges if max_order >= 2 else [],
@@ -210,10 +302,14 @@ class HypergraphModel:
     @staticmethod
     def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
         params = HypergraphModel.SimplicialParams(n_oscillators=n_nodes, n_steps=n_samples)
-        result = HypergraphModel._simulate(params)
+        edges = np.array(edge_config.get("edges", []), dtype=int) - 1
+        triangles = np.array(edge_config.get("triangles", []), dtype=int) - 1
+        result = HypergraphModel._simulate(params, edges, triangles)
 
         HypergraphModel._cached_omega = result["omega"].copy()
         HypergraphModel._cached_nu = result["nu"].copy()
+        HypergraphModel._cached_edges = edges.tolist() if edges.size > 0 else []
+        HypergraphModel._cached_triangles = triangles.tolist() if triangles.size > 0 else []
 
         theta = result["theta"].T
         phi = result["phi"].T

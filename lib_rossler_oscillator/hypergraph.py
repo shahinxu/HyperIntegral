@@ -9,7 +9,7 @@ from scipy.integrate import solve_ivp
 
 class HypergraphModel:
     @staticmethod
-    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    def dynamic_f(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
         ar, br, cr = 0.2, 0.2, 0.7
 
         xold = x[:, 0]
@@ -23,7 +23,7 @@ class HypergraphModel:
         return torch.stack([dxdt, dydt, dzdt], dim=1)
 
     @staticmethod
-    def compute_hyperedge_coupling_tensor(
+    def dynamic_phi(
         x: torch.Tensor,
         all_possible_edges: dict,
         n_nodes: int,

@@ -1,7 +1,3 @@
-"""
-Hypergraph-style interface for ecological dynamics.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +9,8 @@ from scipy.integrate import solve_ivp
 
 
 class HypergraphModel:
+    _cached_params = None
+    _cached_hypergraph = None
     @dataclass
     class EcologicalHypergraphParams:
         n_species: int = 9
@@ -255,29 +253,135 @@ class HypergraphModel:
             "t": sol.t,
             "X": X,
             "x0": x0,
+            "growth_rates": producer_growth_rates,
             **hypergraph,
         }
 
     @staticmethod
-    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
-        return torch.zeros_like(x)
+    def dynamic_f(x: torch.Tensor, n_nodes: int, t: torch.Tensor | float | None = None) -> torch.Tensor:
+        if HypergraphModel._cached_params is None or HypergraphModel._cached_hypergraph is None:
+            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
+
+        params = HypergraphModel._cached_params
+        hypergraph = HypergraphModel._cached_hypergraph
+
+        if x.ndim == 1:
+            x_flat = x
+            out_shape = None
+        else:
+            x_flat = x[:, 0]
+            out_shape = x.shape
+
+        if x_flat.numel() != n_nodes:
+            raise ValueError(f"n_nodes mismatch: got {n_nodes}, but x has {x_flat.numel()} entries")
+
+        device = x_flat.device
+        dtype = x_flat.dtype
+
+        producers = torch.as_tensor(hypergraph["producers"], device=device, dtype=torch.long)
+        primary = torch.as_tensor(hypergraph["primary"], device=device, dtype=torch.long)
+        secondary = torch.as_tensor(hypergraph["secondary"], device=device, dtype=torch.long)
+        growth_rates = torch.as_tensor(hypergraph["growth_rates"], device=device, dtype=dtype)
+
+        dx = torch.zeros_like(x_flat)
+
+        seasonal = 1.0
+        if params.season_amplitude != 0.0 and t is not None:
+            t_val = t
+            if not torch.is_tensor(t_val):
+                t_val = torch.tensor(t_val, device=device, dtype=dtype)
+            seasonal = 1.0 + params.season_amplitude * torch.sin(
+                2.0 * torch.pi * t_val / params.season_period
+            )
+
+        if producers.numel() > 0:
+            r = growth_rates
+            x_p = x_flat[producers]
+            dx[producers] += seasonal * r * x_p * (1.0 - x_p / params.producer_carrying_capacity)
+            dx[producers] += params.producer_replenish * (1.0 - x_p)
+
+        if primary.numel() > 0:
+            dx[primary] -= params.primary_mortality * x_flat[primary]
+            dx[primary] += params.primary_immigration
+        if secondary.numel() > 0:
+            dx[secondary] -= params.secondary_mortality * x_flat[secondary]
+            dx[secondary] += params.secondary_immigration
+
+        for prey, predator, attack, eta in hypergraph["pred_edges"]:
+            prey_idx = int(prey)
+            pred_idx = int(predator)
+            flux = attack * x_flat[pred_idx] * x_flat[prey_idx]
+            dx[prey_idx] -= flux
+            dx[pred_idx] += eta * flux
+
+        if out_shape is not None:
+            return dx.view(out_shape)
+
+        return dx
 
     @staticmethod
-    def compute_hyperedge_coupling_tensor(
+    def dynamic_phi(
         x: torch.Tensor,
         all_possible_edges: dict,
         n_nodes: int,
         device: torch.device,
     ) -> torch.Tensor:
+        if HypergraphModel._cached_params is None:
+            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
+
+        params = HypergraphModel._cached_params
+
         n_total = 0
         for key in ["edges", "triangles", "quads", "quints", "sexts", "septs"]:
             n_total += len(all_possible_edges.get(key, []))
+
         if x.ndim == 1:
+            x_flat = x
             d = 1
         else:
+            x_flat = x[:, 0]
             d = x.shape[1]
 
-        return torch.zeros((n_nodes, d, n_total), device=device)
+        Phi = torch.zeros((n_nodes, d, n_total), device=device, dtype=x.dtype)
+        edge_idx = 0
+
+        edges = all_possible_edges.get("edges")
+        if edges is not None and len(edges) > 0:
+            i_idx = edges[:, 0]
+            j_idx = edges[:, 1]
+            prod = x_flat[i_idx] * x_flat[j_idx]
+            edge_range = edge_idx + torch.arange(edges.shape[0], device=device)
+            Phi[i_idx, 0, edge_range] = -params.w2 * prod
+            Phi[j_idx, 0, edge_range] = -params.w2 * prod
+            edge_idx += edges.shape[0]
+
+        triangles = all_possible_edges.get("triangles")
+        if triangles is not None and len(triangles) > 0:
+            i_idx = triangles[:, 0]
+            j_idx = triangles[:, 1]
+            k_idx = triangles[:, 2]
+            prod = x_flat[i_idx] * x_flat[j_idx] * x_flat[k_idx]
+            edge_range = edge_idx + torch.arange(triangles.shape[0], device=device)
+            Phi[i_idx, 0, edge_range] = -params.w3 * prod
+            Phi[j_idx, 0, edge_range] = -params.w3 * prod
+            Phi[k_idx, 0, edge_range] = -params.w3 * prod
+            edge_idx += triangles.shape[0]
+
+        quads = all_possible_edges.get("quads")
+        if quads is not None and len(quads) > 0:
+            i_idx = quads[:, 0]
+            j_idx = quads[:, 1]
+            k_idx = quads[:, 2]
+            l_idx = quads[:, 3]
+            prod = x_flat[i_idx] * x_flat[j_idx] * x_flat[k_idx] * x_flat[l_idx]
+            edge_range = edge_idx + torch.arange(quads.shape[0], device=device)
+            Phi[i_idx, 0, edge_range] = -params.w4 * prod
+            Phi[j_idx, 0, edge_range] = -params.w4 * prod
+            Phi[k_idx, 0, edge_range] = -params.w4 * prod
+            Phi[l_idx, 0, edge_range] = -params.w4 * prod
+            edge_idx += quads.shape[0]
+
+        return Phi
 
     @staticmethod
     def get_hyperedge_config(n_nodes: int, max_order: int = 4, seed: int = 42) -> dict:
@@ -294,6 +398,8 @@ class HypergraphModel:
         )
 
         result = HypergraphModel._simulate(params)
+        HypergraphModel._cached_params = params
+        HypergraphModel._cached_hypergraph = result
         edges2 = result["edges2"]
         edges3 = result["edges3"]
         edges4 = result["edges4"]
@@ -351,6 +457,8 @@ class HypergraphModel:
         )
 
         result = HypergraphModel._simulate(params)
+        HypergraphModel._cached_params = params
+        HypergraphModel._cached_hypergraph = result
         t = result["t"]
         x_data = result["X"].T[:, :, None]
 
