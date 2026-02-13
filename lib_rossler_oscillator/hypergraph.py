@@ -1,7 +1,3 @@
-"""
-Hypergraph construction and simulation utilities for Rossler Integral models.
-"""
-
 from __future__ import annotations
 
 from itertools import combinations

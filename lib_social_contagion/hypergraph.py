@@ -1,28 +1,14 @@
 """
-Random simplicial complex (RSC) construction for social contagion.
-
-Reference:
-- Iacopini et al., "Simplicial models of social contagion", Nat. Commun. 2019.
-
-This builds a simplicial complex of dimension D=2 with:
-- 1-simplices (edges) sampled with probability p1
-- 2-simplices (full triangles) sampled with probability p_delta
-
-For a desired average node degree <k> and average number of triangles per node
-<k_delta>, the paper gives (for small p1, p_delta):
-    p1 = (<k> - 2<k_delta>) / ((N - 1) - 2<k_delta>)
-    p_delta = 2<k_delta> / ((N - 1)(N - 2))
+Hypergraph-style interface for social contagion.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import comb
-from pathlib import Path
-from typing import Iterable
+from itertools import combinations
 
 import numpy as np
-import matplotlib.pyplot as plt
+import torch
 
 
 @dataclass
@@ -76,7 +62,7 @@ def _unrank_pair(n_nodes: int, rank: int) -> tuple[int, int]:
 
 def _unrank_triplet(n_nodes: int, rank: int) -> tuple[int, int, int]:
     for i in range(n_nodes - 2):
-        count_i = comb(n_nodes - i - 1, 2)
+        count_i = (n_nodes - i - 1) * (n_nodes - i - 2) // 2
         if rank < count_i:
             for j in range(i + 1, n_nodes - 1):
                 count_j = n_nodes - j - 1
@@ -93,7 +79,9 @@ def _sample_unique_combinations(
     p: float,
     rng: np.random.Generator,
 ) -> list[tuple[int, ...]]:
-    total = comb(n_nodes, order)
+    total = 1
+    for i in range(order):
+        total = total * (n_nodes - i) // (i + 1)
     m = int(rng.binomial(total, p))
     if m == 0:
         return []
@@ -139,7 +127,7 @@ def build_rsc_simplicial_complex(params: RSCParams) -> dict:
     }
 
 
-def _build_edge_adjacency(edges: Iterable[tuple[int, int]], n_nodes: int) -> list[list[int]]:
+def _build_edge_adjacency(edges: list[tuple[int, int]], n_nodes: int) -> list[list[int]]:
     adjacency = [[] for _ in range(n_nodes)]
     for i, j in edges:
         adjacency[i].append(j)
@@ -147,7 +135,7 @@ def _build_edge_adjacency(edges: Iterable[tuple[int, int]], n_nodes: int) -> lis
     return adjacency
 
 
-def _build_triangle_pairs(triangles: Iterable[tuple[int, int, int]], n_nodes: int) -> list[list[tuple[int, int]]]:
+def _build_triangle_pairs(triangles: list[tuple[int, int, int]], n_nodes: int) -> list[list[tuple[int, int]]]:
     pairs = [[] for _ in range(n_nodes)]
     for i, j, k in triangles:
         pairs[i].append((j, k))
@@ -205,67 +193,122 @@ def simulate_scm(complex_dict: dict, params: SCMParams) -> dict:
     }
 
 
-def summarize_complex(complex_dict: dict) -> str:
-    n_nodes = len(complex_dict["nodes"])
-    n_edges = len(complex_dict["edges"])
-    n_triangles = len(complex_dict["triangles"])
+def roessler_dynamics(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    return torch.zeros_like(x)
 
-    return (
-        "RSC simplicial complex summary\n"
-        f"- nodes: {n_nodes}\n"
-        f"- edges: {n_edges}\n"
-        f"- triangles: {n_triangles}\n"
-        f"- p1: {complex_dict['p1']:.6f}\n"
-        f"- p_delta: {complex_dict['p_delta']:.6e}\n"
+
+def _count_edges(all_possible_edges: dict) -> int:
+    return sum(len(all_possible_edges.get(key, [])) for key in ["edges", "triangles", "quads", "quints", "sexts", "septs"])
+
+
+def compute_hyperedge_coupling_tensor(
+    x: torch.Tensor,
+    all_possible_edges: dict,
+    n_nodes: int,
+    device: torch.device,
+) -> torch.Tensor:
+    n_total = _count_edges(all_possible_edges)
+    if x.ndim == 1:
+        x_vec = x
+    else:
+        x_vec = x[:, 0]
+
+    phi = torch.zeros((n_nodes, 1, n_total), device=device)
+    edge_idx = 0
+
+    edges = all_possible_edges.get("edges", [])
+    if len(edges) > 0:
+        edges_t = torch.as_tensor(edges, dtype=torch.long, device=device)
+        i_idx = edges_t[:, 0]
+        j_idx = edges_t[:, 1]
+        edge_range = edge_idx + torch.arange(edges_t.shape[0], device=device)
+        phi[i_idx, 0, edge_range] = x_vec[j_idx]
+        phi[j_idx, 0, edge_range] = x_vec[i_idx]
+        edge_idx += edges_t.shape[0]
+
+    triangles = all_possible_edges.get("triangles", [])
+    if len(triangles) > 0:
+        tri_t = torch.as_tensor(triangles, dtype=torch.long, device=device)
+        i_idx = tri_t[:, 0]
+        j_idx = tri_t[:, 1]
+        k_idx = tri_t[:, 2]
+        edge_range = edge_idx + torch.arange(tri_t.shape[0], device=device)
+        phi[i_idx, 0, edge_range] = x_vec[j_idx] * x_vec[k_idx]
+        phi[j_idx, 0, edge_range] = x_vec[i_idx] * x_vec[k_idx]
+        phi[k_idx, 0, edge_range] = x_vec[i_idx] * x_vec[j_idx]
+        edge_idx += tri_t.shape[0]
+
+    return phi
+
+
+def get_hyperedge_config(
+    n_nodes: int,
+    max_order: int = 3,
+    k_mean: float = 20.0,
+    k_delta: float = 6.0,
+    seed: int = 42,
+    enforce_closure: bool = True,
+) -> dict:
+    params = RSCParams(
+        n_nodes=n_nodes,
+        k_mean=k_mean,
+        k_delta=k_delta,
+        seed=seed,
+        enforce_closure=enforce_closure,
     )
-
-
-def save_npz(complex_dict: dict, out_path: Path) -> None:
-    edges = np.array(complex_dict["edges"], dtype=int)
-    triangles = np.array(complex_dict["triangles"], dtype=int)
-    np.savez_compressed(
-        out_path,
-        nodes=complex_dict["nodes"],
-        edges=edges,
-        triangles=triangles,
-        p1=complex_dict["p1"],
-        p_delta=complex_dict["p_delta"],
-        k_mean_target=complex_dict["k_mean_target"],
-        k_delta_target=complex_dict["k_delta_target"],
-        seed=complex_dict["seed"],
-        enforce_closure=complex_dict["enforce_closure"],
-    )
-
-
-def save_node_timeseries(states: np.ndarray, out_path: Path, max_nodes: int = 10) -> None:
-    t = np.arange(states.shape[0])
-    fig, ax = plt.subplots(1, 1, figsize=(12, 7.2))
-    n_nodes = states.shape[1]
-    plot_nodes = min(max_nodes, n_nodes)
-    for i in range(plot_nodes):
-        ax.plot(t, states[:, i], lw=1.2, alpha=0.9)
-    ax.set_xlabel("Time step")
-    ax.set_ylabel("Node state")
-    ax.set_title(f"SCM node trajectories (first {plot_nodes} nodes)")
-    ax.set_ylim(-0.05, 1.05)
-    ax.grid(alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=220)
-    plt.close(fig)
-
-
-if __name__ == "__main__":
-    params = RSCParams()
     complex_dict = build_rsc_simplicial_complex(params)
-    print(summarize_complex(complex_dict))
 
-    sim_params = SCMParams()
-    sim = simulate_scm(complex_dict, sim_params)
-    print("SCM dynamics summary")
-    print(f"- t_max: {sim_params.t_max}")
-    print(f"- rho0: {sim_params.rho0:.3f}")
-    print(f"- rho_final: {sim['states'][-1].mean():.3f}")
+    edges_1b = [[i + 1, j + 1] for i, j in complex_dict["edges"]]
+    triangles_1b = [[i + 1, j + 1, k + 1] for i, j, k in complex_dict["triangles"]]
 
-    fig_path = Path(__file__).resolve().parent / "scm_node_timeseries.png"
-    save_node_timeseries(sim["states"], fig_path, max_nodes=1)
-    print(f"Saved: {fig_path}")
+    return {
+        "edges": edges_1b if max_order >= 2 else [],
+        "triangles": triangles_1b if max_order >= 3 else [],
+        "quads": [],
+        "quints": [],
+        "sexts": [],
+        "septs": [],
+    }
+
+
+def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
+    all_possible = {}
+
+    if max_order >= 2:
+        all_possible["edges"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 2)]
+    else:
+        all_possible["edges"] = []
+
+    if max_order >= 3:
+        all_possible["triangles"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
+    else:
+        all_possible["triangles"] = []
+
+    all_possible["quads"] = []
+    all_possible["quints"] = []
+    all_possible["sexts"] = []
+    all_possible["septs"] = []
+
+    return all_possible
+
+
+def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
+    edges = [[i - 1, j - 1] for i, j in edge_config.get("edges", [])]
+    triangles = [[i - 1, j - 1, k - 1] for i, j, k in edge_config.get("triangles", [])]
+
+    complex_dict = {
+        "nodes": np.arange(n_nodes, dtype=int),
+        "edges": edges,
+        "triangles": triangles,
+    }
+
+    params = SCMParams(t_max=max(1, n_samples - 1))
+    sim = simulate_scm(complex_dict, params)
+    states = sim["states"].astype(float)
+    t = np.arange(states.shape[0], dtype=float)
+
+    if noise > 0:
+        states = states + np.random.randn(*states.shape) * noise
+
+    x_data = states[:, :, None]
+    return t, x_data

@@ -208,6 +208,7 @@ def train_integral_model(
     t_data, x_data = generate_training_data(N, edge_config, n_samples, noise=noise)
     n_times = len(t_data)
     print(f"Data shape: {x_data.shape}, Time points: {n_times}")
+    state_dim = x_data.shape[2]
     if noise > 0:
         print(f"Added Gaussian noise with std={noise}")
 
@@ -226,10 +227,10 @@ def train_integral_model(
         print(f"Original data points: {n_times} (sampling rate ~ {n_times/total_time:.2f} per time unit)")
         print(f"Resampled data points: {n_resampled} (sampling rate ~ {n_resampled/total_time:.2f} per time unit)")
         from scipy.interpolate import interp1d
-        x_data_resampled = np.zeros((n_resampled, N, 3))
+        x_data_resampled = np.zeros((n_resampled, N, state_dim))
         
         for node_idx in range(N):
-            for coord_idx in range(3):
+            for coord_idx in range(state_dim):
                 interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], 
                                       kind='linear', fill_value='extrapolate')
                 x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
@@ -238,12 +239,12 @@ def train_integral_model(
         
         x_data_resampled_cpu = x_data_resampled
         
-        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5*N))
-        coord_names = ['x', 'y', 'z']
+        fig, axes = plt.subplots(N, state_dim, figsize=(5 * state_dim, 2.5 * N))
+        coord_names = [f'd{idx+1}' for idx in range(state_dim)]
         
         for node_idx in range(N):
-            for coord_idx in range(3):
-                ax = axes[node_idx, coord_idx]
+            for coord_idx in range(state_dim):
+                ax = axes[node_idx, coord_idx] if state_dim > 1 else axes[node_idx]
                 
                 ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
                        label='Original (ODE)', markersize=4, alpha=0.7, color='blue')
@@ -272,7 +273,7 @@ def train_integral_model(
         from scipy.interpolate import interp1d
         errors_per_node = []
         for node_idx in range(N):
-            for coord_idx in range(3):
+            for coord_idx in range(state_dim):
                 interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], kind='cubic')
                 x_orig_interp = interp_func(t_data_resampled)
                 
@@ -303,12 +304,12 @@ def train_integral_model(
             all_possible_edges_gpu[key] = torch.empty((0, len(all_possible_edges[key][0]) if all_possible_edges[key] else 2), dtype=torch.long, device=device)
     
     print("Pre-computing coupling tensor Phi and basic dynamics f for all time points...")
-    Phi_all = torch.zeros((n_times, N, 3, n_hyperedges), device=device)
-    f_all = torch.zeros((n_times, N, 3), device=device)
+    Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
+    f_all = torch.zeros((n_times, N, state_dim), device=device)
     
     for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-        x_t = x_data_gpu[t_idx]  # [N, 3]
-        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges_gpu, N, device)  # [N, 3, n_hyperedges]
+        x_t = x_data_gpu[t_idx]  # [N, D]
+        Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges_gpu, N, device)  # [N, D, n_hyperedges]
         f_all[t_idx] = roessler_dynamics(x_t, N)
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
@@ -347,15 +348,15 @@ def train_integral_model(
             if idx_i > idx_j:
                 idx_i, idx_j = idx_j, idx_i
             
-            x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, 3]
+            x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, D]
             
-            lhs = x_j - x_i  # [N, 3]
-            f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3]
-            Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, 3, n_hyperedges]
+            lhs = x_j - x_i  # [N, D]
+            f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, D]
+            Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
             dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
-            integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, 3]
-            Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, 3]
-            integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, 3]
+            integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, D]
+            Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
+            integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, D]
             
             residual = lhs - integral_f - integral_phi_A
             loss = torch.mean(residual ** 2)
@@ -412,17 +413,12 @@ def train_integral_model(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Rossler Integral Model with Hypergraph Topology Learning')
-    parser.add_argument('--n_samples', type=int, default=300, 
-                        help='Number of time samples from ODE solver (default: 300)')
-    parser.add_argument('--n_epochs', type=int, default=20000,
-                        help='Number of training epochs (default: 20000)')
-    parser.add_argument('--lr', type=float, default=0.01,
-                        help='Learning rate (default: 0.01)')
-    parser.add_argument('--gpu_id', type=int, default=6,
-                        help='GPU device ID (default: 6)')
-    parser.add_argument('--noise', type=float, default=0.0,
-                        help='Noise level to add to training data (default: 0.0)')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n_samples', type=int, default=300)
+    parser.add_argument('--n_epochs', type=int, default=20000)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--noise', type=float, default=0.0)
     args = parser.parse_args()
     
     N = 8

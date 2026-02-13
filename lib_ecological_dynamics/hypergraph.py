@@ -1,26 +1,15 @@
 """
-Sparse ecological hypergraph dynamics with trophic predation.
-
-Requested modeling choices implemented:
-- sparse (not fully connected)
-- undirected competition hyperedges of order-2/3/4
-- directed predation only on order-2 edges
-- trophic groups: producers -> primary consumers -> secondary consumers
-- producers have autonomous growth to avoid being eaten out completely
-- predation decreases prey and increases predator with trophic efficiency decay
-- single output figure
+Hypergraph-style interface for ecological dynamics.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import combinations
-from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from scipy.integrate import solve_ivp
-
-
-BASE_DIR = Path(__file__).resolve().parent
 
 
 @dataclass
@@ -52,12 +41,10 @@ class EcologicalHypergraphParams:
     primary_immigration: float = 0.0
     secondary_immigration: float = 0.0
 
-    # Competition weights (undirected hypergraph)
     w2: float = 0.0006
     w3: float = 0.0008
     w4: float = 0.0010
 
-    # Predation parameters (directed order-2 only)
     target_prey_per_primary: int = 2
     target_prey_per_secondary: int = 2
     attack_p_to_c1: float = 2.2
@@ -117,16 +104,10 @@ def _build_trophic_groups(params: EcologicalHypergraphParams):
 
 
 def _build_predation_edges(params: EcologicalHypergraphParams, rng: np.random.Generator):
-    """
-    Directed order-2 predation edges represented as tuples:
-      (prey_idx, predator_idx, attack_rate, conversion_efficiency)
-    """
     p, c1, c2 = _build_trophic_groups(params)
 
     pred_edges = []
 
-    # Fixed ring food web: producers -> primary consumers.
-    # Each predator connects to k nearest prey positions on a circular index.
     n_prey_p = len(p)
     k1 = max(1, min(params.target_prey_per_primary, n_prey_p))
     for pred_pos, predator in enumerate(c1):
@@ -134,7 +115,6 @@ def _build_predation_edges(params: EcologicalHypergraphParams, rng: np.random.Ge
             prey = p[(pred_pos + shift) % n_prey_p]
             pred_edges.append((int(prey), int(predator), params.attack_p_to_c1, params.eta_p_to_c1))
 
-    # Fixed ring food web: primary consumers -> secondary consumers.
     n_prey_c1 = len(c1)
     k2 = max(1, min(params.target_prey_per_secondary, n_prey_c1))
     for pred_pos, predator in enumerate(c2):
@@ -197,12 +177,6 @@ def _predation_term(
     pred_edges: list[tuple[int, int, float, float]],
     half_sat: float,
 ) -> np.ndarray:
-    """
-        For each directed predation edge prey -> predator:
-            flux = attack * predator * prey
-      prey    -= flux
-      predator += eta * flux
-    """
     term = np.zeros_like(x)
     for prey, predator, attack, eta in pred_edges:
         prey_val = x[prey]
@@ -229,25 +203,21 @@ def rhs_ecological_hypergraph(
 
     dx = np.zeros_like(x)
 
-    # Producers: autonomous growth + replenishment, with carrying cap on producer biomass.
     seasonal = 1.0 + params.season_amplitude * np.sin(2.0 * np.pi * t / params.season_period)
     for local_idx, node in enumerate(producers):
         r = producer_growth_rates[local_idx]
         dx[node] += seasonal * r * x[node] * (1.0 - x[node] / params.producer_carrying_capacity)
         dx[node] += params.producer_replenish * (1.0 - x[node])
 
-    # Consumer baseline mortality.
     dx[primary] -= params.primary_mortality * x[primary]
     dx[secondary] -= params.secondary_mortality * x[secondary]
     dx[primary] += params.primary_immigration
     dx[secondary] += params.secondary_immigration
 
-    # Undirected higher-order competition.
     dx += _hyperedge_competition_term(x, hypergraph["edges2"], params.w2)
     dx += _hyperedge_competition_term(x, hypergraph["edges3"], params.w3)
     dx += _hyperedge_competition_term(x, hypergraph["edges4"], params.w4)
 
-    # Directed predation on order-2 edges only.
     dx += _predation_term(x, hypergraph["pred_edges"], params.half_sat)
 
     return dx
@@ -288,47 +258,107 @@ def simulate(params: EcologicalHypergraphParams):
     }
 
 
-def plot_nodes_timeseries(t: np.ndarray, X: np.ndarray, hypergraph: dict, save_path: Path):
-    n = X.shape[0]
-    fig, ax = plt.subplots(1, 1, figsize=(12, 5.8))
-
-    producers = set(hypergraph["producers"].tolist())
-    primary = set(hypergraph["primary"].tolist())
-
-    for i in range(n):
-        if i in producers:
-            color = "tab:green"
-        elif i in primary:
-            color = "tab:blue"
-        else:
-            color = "tab:red"
-        ax.plot(t, X[i], lw=1.2, alpha=0.9, color=color)
-
-    ax.set_title(f"Sparse ecological hypergraph dynamics (N={n})")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Abundance")
-    ax.grid(alpha=0.25)
-
-    fig.tight_layout()
-    fig.savefig(str(save_path), dpi=220)
-    plt.close(fig)
+def roessler_dynamics(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    return torch.zeros_like(x)
 
 
-if __name__ == "__main__":
-    params = EcologicalHypergraphParams()
+def _count_edges(all_possible_edges: dict) -> int:
+    return sum(len(all_possible_edges.get(key, [])) for key in ["edges", "triangles", "quads", "quints", "sexts", "septs"])
+
+
+def compute_hyperedge_coupling_tensor(
+    x: torch.Tensor,
+    all_possible_edges: dict,
+    n_nodes: int,
+    device: torch.device,
+) -> torch.Tensor:
+    n_total = _count_edges(all_possible_edges)
+    if x.ndim == 1:
+        d = 1
+    else:
+        d = x.shape[1]
+
+    return torch.zeros((n_nodes, d, n_total), device=device)
+
+
+def get_hyperedge_config(n_nodes: int, max_order: int = 4, seed: int = 42) -> dict:
+    n_producers = max(1, n_nodes // 3)
+    n_primary = max(1, n_nodes // 3)
+    n_secondary = max(1, n_nodes - n_producers - n_primary)
+
+    params = EcologicalHypergraphParams(
+        n_species=n_nodes,
+        n_producers=n_producers,
+        n_primary_consumers=n_primary,
+        n_secondary_consumers=n_secondary,
+        seed=seed,
+    )
+
     result = simulate(params)
+    edges2 = result["edges2"]
+    edges3 = result["edges3"]
+    edges4 = result["edges4"]
 
-    out = BASE_DIR / "ecology_nodes_timeseries.png"
-    plot_nodes_timeseries(result["t"], result["X"], result, out)
+    edges_1b = [[i + 1, j + 1] for i, j in edges2]
+    triangles_1b = [[i + 1, j + 1, k + 1] for i, j, k in edges3]
+    quads_1b = [[i + 1, j + 1, k + 1, l + 1] for i, j, k, l in edges4]
 
-    print("=" * 78)
-    print("Sparse ecological hypergraph summary (competition + directed predation)")
-    print("=" * 78)
-    print(f"Nodes: {len(result['nodes'])}")
-    print(f"Groups: producers={list(result['producers'])}, primary={list(result['primary'])}, secondary={list(result['secondary'])}")
-    print(f"Undirected order-2 competition edges: {len(result['edges2'])}")
-    print(f"Undirected order-3 competition edges: {len(result['edges3'])}")
-    print(f"Undirected order-4 competition edges: {len(result['edges4'])}")
-    print(f"Directed order-2 predation edges: {len(result['pred_edges'])}")
-    print(f"Predation edge examples (prey, predator, attack, eta): {result['pred_edges'][:8]}")
-    print(f"Saved: {out}")
+    return {
+        "edges": edges_1b if max_order >= 2 else [],
+        "triangles": triangles_1b if max_order >= 3 else [],
+        "quads": quads_1b if max_order >= 4 else [],
+        "quints": [],
+        "sexts": [],
+        "septs": [],
+    }
+
+
+def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
+    all_possible = {}
+
+    if max_order >= 2:
+        all_possible["edges"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 2)]
+    else:
+        all_possible["edges"] = []
+
+    if max_order >= 3:
+        all_possible["triangles"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
+    else:
+        all_possible["triangles"] = []
+
+    if max_order >= 4:
+        all_possible["quads"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 4)]
+    else:
+        all_possible["quads"] = []
+
+    all_possible["quints"] = []
+    all_possible["sexts"] = []
+    all_possible["septs"] = []
+
+    return all_possible
+
+
+def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
+    n_producers = max(1, n_nodes // 3)
+    n_primary = max(1, n_nodes // 3)
+    n_secondary = max(1, n_nodes - n_producers - n_primary)
+
+    params = EcologicalHypergraphParams(
+        n_species=n_nodes,
+        n_producers=n_producers,
+        n_primary_consumers=n_primary,
+        n_secondary_consumers=n_secondary,
+        n_steps=max(10, n_samples),
+    )
+
+    result = simulate(params)
+    t = result["t"]
+    x_data = result["X"].T[:, :, None]
+
+    if x_data.shape[0] != len(t):
+        t = np.linspace(t[0], t[-1], x_data.shape[0])
+
+    if noise > 0:
+        x_data = x_data + np.random.randn(*x_data.shape) * noise
+
+    return t, x_data
