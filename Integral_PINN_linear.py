@@ -165,17 +165,11 @@ def train_integral_model(
     batch_size=32, 
     gpu_id=6,
     use_nn=True,
-    nn_hidden_dim=128,
-    nn_layers=4,
-    stage1_epochs=2500,
-    resample_factor=10,
     n_samples=11,
     noise=0.0
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    # Reserved for future NN mode.
-    _ = (nn_hidden_dim, nn_layers, stage1_epochs, resample_factor)
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
     all_possible_edges = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
     n_hyperedges = (len(all_possible_edges['edges']) + 
@@ -368,12 +362,8 @@ def train_integral_model(
         with torch.no_grad():
             A.clamp_(-2.0, 2.0)
         
-        A_np = A.detach().cpu().numpy().flatten()
         pbar.set_postfix({
-            'loss': f'{total_loss.item():.6f}',
-            'A_min': f'{A_np.min():.3f}',
-            'A_max': f'{A_np.max():.3f}',
-            'A_mean': f'{A_np.mean():.3f}'
+            'loss': f'{total_loss.item():.6f}'
         })
         
         if (epoch + 1) % 500 == 0:
@@ -431,8 +421,6 @@ if __name__ == "__main__":
         batch_size=32,
         gpu_id=args.gpu_id,
         use_nn=True,
-        stage1_epochs=10000,
-        resample_factor=10,
         n_samples=args.n_samples,
         noise=args.noise
     )

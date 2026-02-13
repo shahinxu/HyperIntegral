@@ -400,6 +400,6 @@ class HypergraphModel:
     @staticmethod
     def get_default_params() -> dict:
         return {
-            "n_nodes": 9,
-            "max_order": 4,
+            "n_nodes": 8,
+            "max_order": 7,
         }
