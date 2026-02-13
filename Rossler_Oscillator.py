@@ -1,11 +1,9 @@
 from HyperPINNTopology import HyperPINNTopology
 import torch
-from torch import nn
 from torch import optim as optim
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
-from scipy.linalg import lstsq
 from itertools import combinations
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
@@ -26,7 +24,7 @@ def roessler_hoi(t, x, EdgeList, TriangleList):
         i2 = EdgeList[ii, 1] - 1
         coup_rete[i1] += xold[i2] - xold[i1]
         coup_rete[i2] += xold[i1] - xold[i2]
-    mtrianglelist, ntrianglelist = TriangleList.shape
+    mtrianglelist, _ = TriangleList.shape
     for ii in range(mtrianglelist):
         i1 = TriangleList[ii, 0] - 1
         i2 = TriangleList[ii, 1] - 1
@@ -59,9 +57,6 @@ X = sol.y.T
 nt = len(t_eval)
 dxdt = np.array([roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList) for i, t in enumerate(sol.t)])
 
-## Add noise
-#noise_level = 0.1 * np.std(sol.y) 
-#X += noise_level * np.random.randn(*X.shape)
 x_data = torch.tensor(X, dtype=torch.float64) 
 
 architectures = [("ResNet", True, False),("Attention", False, True)]    
@@ -174,4 +169,3 @@ plt.title('ROC Curves for Identified Hypergraphs',fontsize=17)
 plt.legend(fontsize=14, loc="lower right")
 plt.xticks(fontsize=12)
 plt.yticks(fontsize=12)
-plt.show()   

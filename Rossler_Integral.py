@@ -1,17 +1,3 @@
-"""
-Hypergraph Topology Learning Based on Integral Formulation
-Does not use PINN, but directly uses integral equations:
-x_i(t_{k+1}) - x_i(t_k) = ∫_{t_k}^{t_{k+1}} f(x_i(t)) dt + ∫_{t_k}^{t_{k+1}} Φ_i(t) A_i dt
-
-Left side: Direct difference of raw data
-Right side: 
-  - f(x_i(t)): Integral of Rossler dynamics
-  - Φ_i(t) A_i: Integral of hyperedge coupling term
-  
-Uses rectangular integration (simplest integration method)
-Learnable parameters: A = [N_possible_hyperedge, 1]
-"""
-
 import torch
 from torch import optim
 import numpy as np

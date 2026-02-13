@@ -34,7 +34,7 @@ def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, Se
         coup_rete[i1] += xold[i2] - xold[i1]
         coup_rete[i2] += xold[i1] - xold[i2]
     
-    mtrianglelist, ntrianglelist = TriangleList.shape
+    mtrianglelist, _ = TriangleList.shape
     for ii in range(mtrianglelist):
         i1 = TriangleList[ii, 0] - 1
         i2 = TriangleList[ii, 1] - 1

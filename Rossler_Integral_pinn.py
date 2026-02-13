@@ -1,22 +1,3 @@
-"""
-Hypergraph Topology Learning Based on Integral Formulation
-Does not use PINN, but directly uses integral equations:
-x_i(t_{k+1}) - x_i(t_k) = ∫_{t_k}^{t_{k+1}} f(x_i(t)) dt + ∫_{t_k}^{t_{k+1}} Φ_i(t) A_i dt
-
-Left side: Direct difference of raw data
-Right side: 
-  - f(x_i(t)): Integral of Rossler dynamics
-  - Φ_i(t) A_i: Integral of hyperedge coupling term
-  
-Uses rectangular integration (simplest integration method)
-Learnable parameters: A = [N_possible_hyperedge, 1]
-
-DIFFERENCE FROM Rossler_Integral.py:
-  - Trains TimeResNet to fit data first
-  - Resamples densely from nn (10x more points)
-  - Then proceeds with same precomputation approach as original
-"""
-
 import torch
 from torch import optim, nn
 import numpy as np
@@ -28,10 +9,6 @@ import os
 from datetime import datetime
 from tqdm import tqdm
 import argparse
-
-# ============================================================================
-# NEURAL NETWORK COMPONENTS (Same architecture as HyperPINNTopology.py)
-# ============================================================================
 
 class ResidualBlock(nn.Module):
     """ResidualBlock with LayerNorm and GELU (from HyperPINNTopology.py)"""
@@ -68,22 +45,15 @@ class TimeResNet(nn.Module):
         self.register_buffer('x_std', torch.ones(output_dim))
 
     def forward(self, t, normalize=False):
-        # t: [B, 1]
         if normalize:
             t = (t - self.t_mean) / (self.t_std + 1e-8)
-        # IMPORTANT: HyperPINNTopology uses tanh here, not gelu!
-        h = torch.tanh(self.input_layer(t))
+        h = torch.tanh(self.input_layer(t.unsqueeze(-1)))
         for block in self.res_blocks:
             h = block(h)
         out = self.output_layer(h)
         if normalize:
             out = out * self.x_std + self.x_mean
         return out
-
-
-# ============================================================================
-# IDENTICAL TO Rossler_Integral.py FROM HERE
-# ============================================================================
 
 def roessler_dynamics(x, N):
     ar, br, cr = 0.2, 0.2, 0.7
@@ -205,7 +175,7 @@ def compute_hyperedge_coupling_tensor(x, all_possible_edges, N, device):
     
     # 7-edges - FULLY Vectorized
     if n_septs > 0:
-        septs_tensor = all_possible_edges['septs']  # [n_septs, 7]
+        septs_tensor = all_possible_edges['septs']
         i_idx = septs_tensor[:, 0]
         j_idx = septs_tensor[:, 1]
         k_idx = septs_tensor[:, 2]
@@ -225,11 +195,10 @@ def compute_hyperedge_coupling_tensor(x, all_possible_edges, N, device):
         Phi[n_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zl * zm * zo - zn**3)
         Phi[o_idx, 2, edge_range] = kD * (zi**2 * zj * zk * zl * zm * zn - zo**3)
     
-    return Phi  # [N, 3, N_total_hyperedges]
+    return Phi
 
 
 def get_hyperedge_config(N, max_order=7):
-    """Get hyperedge configuration for N nodes"""
     configs = {
         8: {
             'edges': [[1, 2],[2, 3],[3, 4],[5, 6],[6, 7],[7, 8]],
@@ -278,7 +247,6 @@ def get_hyperedge_config(N, max_order=7):
     
     config = configs[N]
     
-    # Filter by max_order
     filtered_config = {}
     if max_order >= 2:
         filtered_config['edges'] = config['edges']
@@ -351,8 +319,6 @@ def generate_all_possible_hyperedges(N, max_order):
 
 def get_legendre_quadrature(n_quad: int, device):
     """Return Gauss-Legendre nodes and weights on [-1, 1] as torch tensors."""
-    import numpy as np
-
     nodes, weights = np.polynomial.legendre.leggauss(n_quad)
     nodes = torch.tensor(nodes, dtype=torch.float32, device=device)
     weights = torch.tensor(weights, dtype=torch.float32, device=device)
@@ -506,6 +472,151 @@ def compute_dynamics_with_A(x_t, A, all_possible_edges_gpu, N, device):
         PhiA[:, 2].index_add_(0, m_idx, term_m)
         PhiA[:, 2].index_add_(0, n_idx, term_n)
         PhiA[:, 2].index_add_(0, o_idx, term_o)
+        offset += n_septs
+
+    return f_t + PhiA
+
+
+def compute_dynamics_with_A_batch(x_t, A, all_possible_edges_gpu, N, device):
+    xold = x_t[:, :, 0]
+    yold = x_t[:, :, 1]
+    zold = x_t[:, :, 2]
+    k, kD = 0.4, 0.3
+
+    dxdt = -yold - zold
+    dydt = xold + 0.2 * yold
+    dzdt = 0.2 + zold * (xold - 0.7)
+    f_t = torch.stack([dxdt, dydt, dzdt], dim=2)
+
+    A_flat = A.view(-1)
+    B = x_t.shape[0]
+    PhiA = torch.zeros((B, N, 3), device=device)
+    offset = 0
+
+    edges = all_possible_edges_gpu['edges']
+    n_edges = edges.shape[0]
+    if n_edges > 0:
+        coeff = A_flat[offset:offset + n_edges]
+        i_idx = edges[:, 0]
+        j_idx = edges[:, 1]
+        diff = k * (xold[:, j_idx] - xold[:, i_idx])
+        contrib = diff * coeff
+        PhiA[:, :, 0].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), contrib)
+        PhiA[:, :, 0].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), -contrib)
+        offset += n_edges
+
+    triangles = all_possible_edges_gpu['triangles']
+    n_triangles = triangles.shape[0]
+    if n_triangles > 0:
+        coeff = A_flat[offset:offset + n_triangles]
+        i_idx = triangles[:, 0]
+        j_idx = triangles[:, 1]
+        k_idx = triangles[:, 2]
+        xi, xj, xk = xold[:, i_idx], xold[:, j_idx], xold[:, k_idx]
+        term_i = kD * (xj**2 * xk - xi**3 + xj * xk**2 - xi**3) * coeff
+        term_j = kD * (xi**2 * xk - xj**3 + xi * xk**2 - xj**3) * coeff
+        term_k = kD * (xi**2 * xj - xk**3 + xi * xj**2 - xk**3) * coeff
+        PhiA[:, :, 0].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), term_i)
+        PhiA[:, :, 0].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), term_j)
+        PhiA[:, :, 0].scatter_add_(1, k_idx.unsqueeze(0).expand(B, -1), term_k)
+        offset += n_triangles
+
+    quads = all_possible_edges_gpu['quads']
+    n_quads = quads.shape[0]
+    if n_quads > 0:
+        coeff = A_flat[offset:offset + n_quads]
+        i_idx = quads[:, 0]
+        j_idx = quads[:, 1]
+        k_idx = quads[:, 2]
+        l_idx = quads[:, 3]
+        xi, xj, xk, xl = xold[:, i_idx], xold[:, j_idx], xold[:, k_idx], xold[:, l_idx]
+        term_i = kD * (xj**2 * xk * xl - xi**3) * coeff
+        term_j = kD * (xi**2 * xk * xl - xj**3) * coeff
+        term_k = kD * (xi**2 * xj * xl - xk**3) * coeff
+        term_l = kD * (xi**2 * xj * xk - xl**3) * coeff
+        PhiA[:, :, 0].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), term_i)
+        PhiA[:, :, 0].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), term_j)
+        PhiA[:, :, 0].scatter_add_(1, k_idx.unsqueeze(0).expand(B, -1), term_k)
+        PhiA[:, :, 0].scatter_add_(1, l_idx.unsqueeze(0).expand(B, -1), term_l)
+        offset += n_quads
+
+    quints = all_possible_edges_gpu['quints']
+    n_quints = quints.shape[0]
+    if n_quints > 0:
+        coeff = A_flat[offset:offset + n_quints]
+        i_idx = quints[:, 0]
+        j_idx = quints[:, 1]
+        k_idx = quints[:, 2]
+        l_idx = quints[:, 3]
+        m_idx = quints[:, 4]
+        yi, yj, yk, yl, ym = yold[:, i_idx], yold[:, j_idx], yold[:, k_idx], yold[:, l_idx], yold[:, m_idx]
+        term_i = kD * (yj**2 * yk * yl * ym - yi**3) * coeff
+        term_j = kD * (yi**2 * yk * yl * ym - yj**3) * coeff
+        term_k = kD * (yi**2 * yj * yl * ym - yk**3) * coeff
+        term_l = kD * (yi**2 * yj * yk * ym - yl**3) * coeff
+        term_m = kD * (yi**2 * yj * yk * yl - ym**3) * coeff
+        PhiA[:, :, 1].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), term_i)
+        PhiA[:, :, 1].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), term_j)
+        PhiA[:, :, 1].scatter_add_(1, k_idx.unsqueeze(0).expand(B, -1), term_k)
+        PhiA[:, :, 1].scatter_add_(1, l_idx.unsqueeze(0).expand(B, -1), term_l)
+        PhiA[:, :, 1].scatter_add_(1, m_idx.unsqueeze(0).expand(B, -1), term_m)
+        offset += n_quints
+
+    sexts = all_possible_edges_gpu['sexts']
+    n_sexts = sexts.shape[0]
+    if n_sexts > 0:
+        coeff = A_flat[offset:offset + n_sexts]
+        i_idx = sexts[:, 0]
+        j_idx = sexts[:, 1]
+        k_idx = sexts[:, 2]
+        l_idx = sexts[:, 3]
+        m_idx = sexts[:, 4]
+        n_idx = sexts[:, 5]
+        yi, yj, yk, yl, ym, yn = (
+            yold[:, i_idx], yold[:, j_idx], yold[:, k_idx], yold[:, l_idx], yold[:, m_idx], yold[:, n_idx]
+        )
+        term_i = kD * (yj**2 * yk * yl * ym * yn - yi**3) * coeff
+        term_j = kD * (yi**2 * yk * yl * ym * yn - yj**3) * coeff
+        term_k = kD * (yi**2 * yj * yl * ym * yn - yk**3) * coeff
+        term_l = kD * (yi**2 * yj * yk * ym * yn - yl**3) * coeff
+        term_m = kD * (yi**2 * yj * yk * yl * yn - ym**3) * coeff
+        term_n = kD * (yi**2 * yj * yk * yl * ym - yn**3) * coeff
+        PhiA[:, :, 1].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), term_i)
+        PhiA[:, :, 1].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), term_j)
+        PhiA[:, :, 1].scatter_add_(1, k_idx.unsqueeze(0).expand(B, -1), term_k)
+        PhiA[:, :, 1].scatter_add_(1, l_idx.unsqueeze(0).expand(B, -1), term_l)
+        PhiA[:, :, 1].scatter_add_(1, m_idx.unsqueeze(0).expand(B, -1), term_m)
+        PhiA[:, :, 1].scatter_add_(1, n_idx.unsqueeze(0).expand(B, -1), term_n)
+        offset += n_sexts
+
+    septs = all_possible_edges_gpu['septs']
+    n_septs = septs.shape[0]
+    if n_septs > 0:
+        coeff = A_flat[offset:offset + n_septs]
+        i_idx = septs[:, 0]
+        j_idx = septs[:, 1]
+        k_idx = septs[:, 2]
+        l_idx = septs[:, 3]
+        m_idx = septs[:, 4]
+        n_idx = septs[:, 5]
+        o_idx = septs[:, 6]
+        zi, zj, zk, zl, zm, zn, zo = (
+            zold[:, i_idx], zold[:, j_idx], zold[:, k_idx], zold[:, l_idx], zold[:, m_idx], zold[:, n_idx], zold[:, o_idx]
+        )
+        term_i = kD * (zj**2 * zk * zl * zm * zn * zo - zi**3) * coeff
+        term_j = kD * (zi**2 * zk * zl * zm * zn * zo - zj**3) * coeff
+        term_k = kD * (zi**2 * zj * zl * zm * zn * zo - zk**3) * coeff
+        term_l = kD * (zi**2 * zj * zk * zm * zn * zo - zl**3) * coeff
+        term_m = kD * (zi**2 * zj * zk * zl * zn * zo - zm**3) * coeff
+        term_n = kD * (zi**2 * zj * zk * zl * zm * zo - zn**3) * coeff
+        term_o = kD * (zi**2 * zj * zk * zl * zm * zn - zo**3) * coeff
+        PhiA[:, :, 2].scatter_add_(1, i_idx.unsqueeze(0).expand(B, -1), term_i)
+        PhiA[:, :, 2].scatter_add_(1, j_idx.unsqueeze(0).expand(B, -1), term_j)
+        PhiA[:, :, 2].scatter_add_(1, k_idx.unsqueeze(0).expand(B, -1), term_k)
+        PhiA[:, :, 2].scatter_add_(1, l_idx.unsqueeze(0).expand(B, -1), term_l)
+        PhiA[:, :, 2].scatter_add_(1, m_idx.unsqueeze(0).expand(B, -1), term_m)
+        PhiA[:, :, 2].scatter_add_(1, n_idx.unsqueeze(0).expand(B, -1), term_n)
+        PhiA[:, :, 2].scatter_add_(1, o_idx.unsqueeze(0).expand(B, -1), term_o)
         offset += n_septs
 
     return f_t + PhiA
@@ -881,8 +992,6 @@ def train_integral_model(
     )
 
     lambda_phys = 1.0
-    total_time = float(t_data[-1] - t_data[0])
-    min_window = total_time / 5.0  # minimum integration window length
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = f"results_integral_pinn/sample_{n_samples}_noise_{noise}/{timestamp}"
@@ -893,21 +1002,18 @@ def train_integral_model(
             x_pred_data_flat = net(t_data_nn, normalize=True).cpu().numpy()
             x_pred_data = flat_to_xyz_numpy(x_pred_data_flat, N)
 
-            # Dense 500-point trajectory for visualization
             target_points = 500
             t_dense = np.linspace(t_data[0], t_data[-1], target_points)
             t_dense_gpu = torch.tensor(t_dense, dtype=torch.float32, device=device).unsqueeze(1)
             x_dense_flat = net(t_dense_gpu, normalize=True).cpu().numpy()
             x_dense_flat = flat_to_xyz_numpy(x_dense_flat, N)
 
-        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5 * N))
+        _, axes = plt.subplots(N, 3, figsize=(15, 2.5 * N))
         coord_names = ['x', 'y', 'z']
 
         for node_idx in range(N):
             for coord_idx in range(3):
                 ax = axes[node_idx, coord_idx]
-
-                # Original (possibly noisy) data
                 ax.plot(
                     t_data,
                     x_data[:, node_idx, coord_idx],
@@ -954,47 +1060,38 @@ def train_integral_model(
         if epoch < stage1_epochs:
             loss_phys = torch.tensor(0.0, device=device)
         elif physics_every > 0:
-            physics_losses = []
-            for _ in range(physics_batch_size):
-                t1 = float(np.random.uniform(t_data[0], t_data[-1] - min_window))
-                t2 = float(np.random.uniform(t1 + min_window, t_data[-1]))
+            t_start = float(t_data[0])
+            t_end = float(t_data[-1])
+            t_start_t = torch.tensor(t_start, device=device)
+            t_end_t = torch.tensor(t_end, device=device)
 
-                t_mid = 0.5 * (t1 + t2)
-                t_half = 0.5 * (t2 - t1)
+            t1 = t_start_t + (t_end_t - t_start_t) * torch.rand(physics_batch_size, device=device)
+            t2 = t_start_t + (t_end_t - t_start_t) * torch.rand(physics_batch_size, device=device)
+            t1, t2 = torch.minimum(t1, t2), torch.maximum(t1, t2)
 
-                # Map quadrature nodes from [-1,1] to [t1,t2]
-                t_eval = t_mid + t_half * quad_nodes  # [n_quad]
-                t_eval_nn = t_eval.unsqueeze(1)       # [n_quad,1]
+            t_mid = 0.5 * (t1 + t2)
+            t_half = 0.5 * (t2 - t1)
 
-                # Trajectory samples at quadrature points
-                x_eval_flat = net(t_eval_nn, normalize=True)  # [n_quad,3N]
-                x_eval = flat_to_xyz_torch(x_eval_flat, N)    # [n_quad,N,3]
+            # Map quadrature nodes from [-1,1] to [t1,t2]
+            t_eval = t_mid[:, None] + t_half[:, None] * quad_nodes[None, :]  # [B, Q]
+            t_eval_nn = t_eval.reshape(-1, 1)
 
-                # Approximate integral of f+PhiA over [t1,t2]
-                integral = torch.zeros(N, 3, device=device)
-                for k in range(n_quad):
-                    dyn_k = compute_dynamics_with_A(
-                        x_eval[k], A, all_possible_edges_gpu, N, device
-                    )  # [N,3]
-                    integral += quad_weights[k] * dyn_k
-                integral = integral * t_half  # scale by (t2 - t1) / 2
+            # Trajectory samples at quadrature points
+            x_eval_flat = net(t_eval_nn, normalize=True)  # [B*Q,3N]
+            x_eval = flat_to_xyz_torch(x_eval_flat, N).view(physics_batch_size, -1, N, 3)
 
-                # Left-hand side: x(t2) - x(t1)
-                x1_flat = net(
-                    torch.tensor([[t1]], dtype=torch.float32, device=device),
-                    normalize=True,
-                )  # [1,3N]
-                x2_flat = net(
-                    torch.tensor([[t2]], dtype=torch.float32, device=device),
-                    normalize=True,
-                )  # [1,3N]
-                lhs = flat_to_xyz_torch(x2_flat - x1_flat, N).squeeze(0)
+            # Approximate integral of f+PhiA over [t1,t2]
+            dyn_all = compute_dynamics_with_A_batch(
+                x_eval.view(-1, N, 3), A, all_possible_edges_gpu, N, device
+            ).view(physics_batch_size, -1, N, 3)  # [B,Q,N,3]
+            integral = torch.einsum('bqni,q->bni', dyn_all, quad_weights) * t_half[:, None, None]
 
-                physics_losses.append(torch.mean((lhs - integral) ** 2))
+            # Left-hand side: x(t2) - x(t1)
+            x1_flat = net(t1.unsqueeze(1), normalize=True)
+            x2_flat = net(t2.unsqueeze(1), normalize=True)
+            lhs = flat_to_xyz_torch(x2_flat - x1_flat, N)
 
-            loss_phys = (
-                torch.mean(torch.stack(physics_losses)) if physics_losses else torch.tensor(0.0, device=device)
-            )
+            loss_phys = torch.mean((lhs - integral) ** 2)
         else:
             loss_phys = torch.tensor(0.0, device=device)
 
