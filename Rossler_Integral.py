@@ -10,7 +10,7 @@ from datetime import datetime
 from tqdm import tqdm
 import argparse
 
-def roessler_dynamics(x, N):
+def dynamic(x, N):
     """
     Rossler dynamics basic equations (without coupling terms) - GPU version
     x: [N, 3] torch tensor [[x1,y1,z1], [x2,y2,z2], ...]
@@ -560,7 +560,7 @@ def train_integral_model(N=8, max_order=7, n_epochs=10000, lr=0.001, batch_size=
     for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
         x_t = x_data_gpu[t_idx]  # [N, 3]
         Phi_all[t_idx] = compute_hyperedge_coupling_tensor(x_t, all_possible_edges, N, device)  # [N, 3, n_hyperedges]
-        f_all[t_idx] = roessler_dynamics(x_t, N)  # [N, 3]
+        f_all[t_idx] = dynamic(x_t, N)  # [N, 3]
     
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]  # [T-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")

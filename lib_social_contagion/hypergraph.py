@@ -193,7 +193,7 @@ class HypergraphModel:
         }
 
     @staticmethod
-    def roessler_dynamics(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
         return torch.zeros_like(x)
 
     @staticmethod

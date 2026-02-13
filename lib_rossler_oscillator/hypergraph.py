@@ -9,7 +9,7 @@ from scipy.integrate import solve_ivp
 
 class HypergraphModel:
     @staticmethod
-    def roessler_dynamics(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
         ar, br, cr = 0.2, 0.2, 0.7
 
         xold = x[:, 0]

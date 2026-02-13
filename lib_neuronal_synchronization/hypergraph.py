@@ -98,7 +98,7 @@ class HypergraphModel:
         return out
 
     @staticmethod
-    def roessler_dynamics(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    def dynamic(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
         params = HypergraphModel.SimplicialParams(n_oscillators=n_nodes)
         theta = x[:, 0]
         phi = x[:, 1]

@@ -55,7 +55,7 @@ class TimeResNet(nn.Module):
             out = out * self.x_std + self.x_mean
         return out
 
-def roessler_dynamics(x, N):
+def dynamic(x, N):
     ar, br, cr = 0.2, 0.2, 0.7
     
     xold = x[:, 0]  # [N]
@@ -333,7 +333,7 @@ def compute_dynamics_with_A(x_t, A, all_possible_edges_gpu, N, device):
     Returns: [N, 3]
     """
     # Basic Rossler dynamics f(x)
-    f_t = roessler_dynamics(x_t, N)  # [N, 3]
+    f_t = dynamic(x_t, N)  # [N, 3]
 
     xold = x_t[:, 0]
     yold = x_t[:, 1]

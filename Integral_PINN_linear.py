@@ -56,7 +56,7 @@ class TimeResNet(nn.Module):
 
 def compute_auc_scores(A_learned, edge_config, N, max_order):
     # Generate all possible hyperedges
-    all_possible = generate_all_possible_hyperedges(N, max_order)
+    all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
     
     # Flatten A
     A_flat = A_learned.flatten()
@@ -120,7 +120,7 @@ def compute_auc_scores(A_learned, edge_config, N, max_order):
     return auc_scores, roc_data
 
 
-def plot_roc_curves(roc_data, auc_scores, save_dir):
+def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
     plt.figure(figsize=(8, 6))
     # Define colors
     colors = {
@@ -174,6 +174,8 @@ def train_integral_model(
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    # Reserved for future NN mode.
+    _ = (nn_hidden_dim, nn_layers, stage1_epochs, resample_factor)
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
     all_possible_edges = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
     n_hyperedges = (len(all_possible_edges['edges']) + 
@@ -306,7 +308,7 @@ def train_integral_model(
         Phi_all[t_idx] = HypergraphModel.compute_hyperedge_coupling_tensor(
             x_t, all_possible_edges_gpu, N, device
         )  # [N, D, n_hyperedges]
-        f_all[t_idx] = HypergraphModel.roessler_dynamics(x_t, N)
+        f_all[t_idx] = HypergraphModel.dynamic(x_t, N)
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
@@ -381,7 +383,7 @@ def train_integral_model(
             A_current = A.detach().cpu().numpy()
             auc_scores, _ = compute_auc_scores(A_current, edge_config, N, max_order)
             
-            all_possible = generate_all_possible_hyperedges(N, max_order)
+            all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
             A_flat = A_current.flatten()
             A_idx = 0
             
@@ -455,6 +457,6 @@ if __name__ == "__main__":
                 f.write(f"  {order_label}: N/A\n")
     
     print("\nPlotting ROC curves...")
-    plot_roc_curves(roc_data, auc_scores, save_dir)
+    plot_roc_curves(roc_data, auc_scores, save_dir, max_order)
     
     print(f"\nResults saved to {save_dir}/")
