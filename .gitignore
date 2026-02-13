@@ -3,3 +3,11 @@ __pycache__/
 *.txt
 results/
 *.log
+*.csv
+*.json
+*.h5
+*.ckpt
+*.pt
+*.pth
+*.png
+*.pdf
