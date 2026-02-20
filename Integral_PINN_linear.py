@@ -168,7 +168,8 @@ def train_integral_model(
     gpu_id=6,
     use_nn=True,
     n_samples=11,
-    noise=0.0
+    noise=0.0,
+    n_trajectories: int = 1,
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -201,96 +202,161 @@ def train_integral_model(
     print(f"  7-edges: {len(edge_config.get('septs', []))}")
     
     print("\nGenerating training data...")
-    t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise)
-    n_times = len(t_data)
-    print(f"Data shape: {x_data.shape}, Time points: {n_times}")
-    state_dim = x_data.shape[2]
-    if noise > 0:
-        print(f"Added Gaussian noise with std={noise}")
+    try:
+        model_module = HypergraphModel.__module__
+    except Exception:
+        model_module = ""
+    is_discrete_social = "lib_social_contagion" in model_module
 
-    if use_nn:
-        print("\n" + "="*80)
-        print("LINEAR INTERPOLATION MODE: Using piecewise linear curves")
-        print("="*80)        
-        print(f"\nUsing LINEAR INTERPOLATION (no neural network)")
-        print(f"  Original {n_times} points will be connected by straight lines")
-        print(f"  This GUARANTEES passing through all observation points!")
-        print(f"\nDense resampling using linear interpolation to unified sampling rate 500/20...")
-        total_time = float(t_data[-1] - t_data[0])  # should be ~20.0
-        target_points = 500
-        n_resampled = target_points
-        t_data_resampled = np.linspace(t_data[0], t_data[-1], n_resampled)
-        print(f"Original data points: {n_times} (sampling rate ~ {n_times/total_time:.2f} per time unit)")
-        print(f"Resampled data points: {n_resampled} (sampling rate ~ {n_resampled/total_time:.2f} per time unit)")
-        from scipy.interpolate import interp1d
-        x_data_resampled = np.zeros((n_resampled, N, state_dim))
-        
-        for node_idx in range(N):
-            for coord_idx in range(state_dim):
-                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], 
-                                      kind='linear', fill_value='extrapolate')
-                x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
-        
-        print(f"Linear interpolation completed!")
-        
-        x_data_resampled_cpu = x_data_resampled
-        
-        fig, axes = plt.subplots(N, state_dim, figsize=(5 * state_dim, 2.5 * N))
-        coord_names = [f'd{idx+1}' for idx in range(state_dim)]
-        
-        for node_idx in range(N):
-            for coord_idx in range(state_dim):
-                ax = axes[node_idx, coord_idx] if state_dim > 1 else axes[node_idx]
-                
-                ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
-                       label='Original (ODE)', markersize=4, alpha=0.7, color='blue')
-                
-                ax.plot(t_data_resampled, x_data_resampled_cpu[:, node_idx, coord_idx], 
-                       '-', label='Resampled (Linear)', linewidth=1, alpha=0.8, color='red')
-                
-                if node_idx == 0:
-                    ax.set_title(f'{coord_names[coord_idx]}-coordinate', fontsize=12)
-                if coord_idx == 0:
-                    ax.set_ylabel(f'Node {node_idx+1}', fontsize=11)
-                if node_idx == N-1:
-                    ax.set_xlabel('Time', fontsize=10)
-                ax.grid(True, alpha=0.3)
-                if node_idx == 0 and coord_idx == 0:
-                    ax.legend(fontsize=9)
-        
-        plt.tight_layout()
+    # --- Data generation: single vs multi-trajectory ---
+    if is_discrete_social and n_trajectories > 1:
+        print(f"Using social contagion model with {n_trajectories} independent trajectories on the same hypergraph...")
+        traj_t_list = []
+        traj_x_list = []
+        base_seed = 123
+        for k in range(n_trajectories):
+            seed_k = base_seed + k
+            t_k, x_k = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise, seed=seed_k)
+            traj_t_list.append(t_k)
+            traj_x_list.append(x_k)
+        # Assume all trajectories share the same time grid
+        t_data = traj_t_list[0]
+        x_data_multi = np.stack(traj_x_list, axis=0)  # [K, T, N, D]
+        n_times = len(t_data)
+        print(f"Multi-trajectory data shape: {x_data_multi.shape}, Time points: {n_times}")
+        state_dim = x_data_multi.shape[3]
+        if noise > 0:
+            print(f"Added Gaussian noise with std={noise}")
+        # For simplicity, in multi-trajectory mode we skip extra linear
+        # resampling and work directly on the native ODE grid.
+        save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs(save_dir, exist_ok=True)
+        # Targets are the original 0/1 observations; inputs can be smoothed.
+        x_target = x_data_multi.copy()
+        # Temporal smoothing per trajectory to reduce Bernoulli noise.
+        print("Applying temporal smoothing for discrete contagion data (multi-trajectory, moving average, window=5)...")
+        window = 5
+        pad = window // 2
+        x_smooth = np.zeros_like(x_data_multi)
+        for k in range(n_trajectories):
+            x_padded = np.pad(x_data_multi[k], ((pad, pad), (0, 0), (0, 0)), mode="edge")
+            for t_idx in range(n_times):
+                x_smooth[k, t_idx] = x_padded[t_idx:t_idx + window].mean(axis=0)
+        x_data = x_smooth  # [K, T, N, D]
+    else:
+        # Original single-trajectory path
+        t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise)
+        n_times = len(t_data)
+        print(f"Data shape: {x_data.shape}, Time points: {n_times}")
+        state_dim = x_data.shape[2]
+        if noise > 0:
+            print(f"Added Gaussian noise with std={noise}")
+
+        if use_nn:
+            print("\n" + "="*80)
+            print("LINEAR INTERPOLATION MODE: Using piecewise linear curves")
+            print("="*80)        
+            print(f"\nUsing LINEAR INTERPOLATION (no neural network)")
+            print(f"  Original {n_times} points will be connected by straight lines")
+            print(f"  This GUARANTEES passing through all observation points!")
+            print(f"\nDense resampling using linear interpolation to unified sampling rate 500/20...")
+            total_time = float(t_data[-1] - t_data[0])  # should be ~20.0
+            target_points = 500
+            n_resampled = target_points
+            t_data_resampled = np.linspace(t_data[0], t_data[-1], n_resampled)
+            print(f"Original data points: {n_times} (sampling rate ~ {n_times/total_time:.2f} per time unit)")
+            print(f"Resampled data points: {n_resampled} (sampling rate ~ {n_resampled/total_time:.2f} per time unit)")
+            from scipy.interpolate import interp1d
+            x_data_resampled = np.zeros((n_resampled, N, state_dim))
+            
+            for node_idx in range(N):
+                for coord_idx in range(state_dim):
+                    interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], 
+                                          kind='linear', fill_value='extrapolate')
+                    x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
+            
+            print(f"Linear interpolation completed!")
+            
+            x_data_resampled_cpu = x_data_resampled
+            
+            fig, axes = plt.subplots(N, state_dim, figsize=(5 * state_dim, 2.5 * N))
+            coord_names = [f'd{idx+1}' for idx in range(state_dim)]
+            
+            for node_idx in range(N):
+                for coord_idx in range(state_dim):
+                    ax = axes[node_idx, coord_idx] if state_dim > 1 else axes[node_idx]
+                    
+                    ax.plot(t_data, x_data[:, node_idx, coord_idx], 'o', 
+                           label='Original (ODE)', markersize=4, alpha=0.7, color='blue')
+                    
+                    ax.plot(t_data_resampled, x_data_resampled_cpu[:, node_idx, coord_idx], 
+                           '-', label='Resampled (Linear)', linewidth=1, alpha=0.8, color='red')
+                    
+                    if node_idx == 0:
+                        ax.set_title(f'{coord_names[coord_idx]}-coordinate', fontsize=12)
+                    if coord_idx == 0:
+                        ax.set_ylabel(f'Node {node_idx+1}', fontsize=11)
+                    if node_idx == N-1:
+                        ax.set_xlabel('Time', fontsize=10)
+                    ax.grid(True, alpha=0.3)
+                    if node_idx == 0 and coord_idx == 0:
+                        ax.legend(fontsize=9)
+            
+            plt.tight_layout()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/{timestamp}"
+            os.makedirs(save_dir, exist_ok=True)
+            plt.savefig(os.path.join(save_dir, 'linear_vs_original.png'), dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"Comparison plot saved to {os.path.join(save_dir, 'linear_vs_original.png')}")
+            
+            from scipy.interpolate import interp1d
+            errors_per_node = []
+            for node_idx in range(N):
+                for coord_idx in range(state_dim):
+                    interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], kind='cubic')
+                    x_orig_interp = interp_func(t_data_resampled)
+                    
+                    error = np.abs(x_data_resampled_cpu[:, node_idx, coord_idx] - x_orig_interp)
+                    errors_per_node.append(error)
+            
+            errors_all = np.concatenate(errors_per_node)
+            print(f"\nLinear interpolation fitting error statistics:")
+            print(f"  Mean absolute error: {errors_all.mean():.6f}")
+            print(f"  Max absolute error: {errors_all.max():.6f}")
+            print(f"  Std of error: {errors_all.std():.6f}")
+            
+            t_data = t_data_resampled
+            x_data = x_data_resampled_cpu
+            n_times = n_resampled
+            print(f"\nReplaced data with resampled version: {x_data.shape}")
+            print("="*80 + "\n")
+
+        # Single-trajectory targets / smoothing
+        x_target = x_data
+        if is_discrete_social:
+            print("Applying temporal smoothing for discrete contagion data (moving average, window=5)...")
+            x_target = x_data.copy()
+            window = 5
+            pad = window // 2
+            x_padded = np.pad(x_data, ((pad, pad), (0, 0), (0, 0)), mode="edge")
+            x_smooth = np.zeros_like(x_data)
+            for t_idx in range(n_times):
+                x_smooth[t_idx] = x_padded[t_idx:t_idx + window].mean(axis=0)
+            x_data = x_smooth
+        # Set up a default save_dir for this run
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/{timestamp}"
         os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, 'linear_vs_original.png'), dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"Comparison plot saved to {os.path.join(save_dir, 'linear_vs_original.png')}")
-        
-        from scipy.interpolate import interp1d
-        errors_per_node = []
-        for node_idx in range(N):
-            for coord_idx in range(state_dim):
-                interp_func = interp1d(t_data, x_data[:, node_idx, coord_idx], kind='cubic')
-                x_orig_interp = interp_func(t_data_resampled)
-                
-                error = np.abs(x_data_resampled_cpu[:, node_idx, coord_idx] - x_orig_interp)
-                errors_per_node.append(error)
-        
-        errors_all = np.concatenate(errors_per_node)
-        print(f"\nLinear interpolation fitting error statistics:")
-        print(f"  Mean absolute error: {errors_all.mean():.6f}")
-        print(f"  Max absolute error: {errors_all.max():.6f}")
-        print(f"  Std of error: {errors_all.std():.6f}")
-        
-        t_data = t_data_resampled
-        x_data = x_data_resampled_cpu
-        n_times = n_resampled
-        print(f"\nReplaced data with resampled version: {x_data.shape}")
-        print("="*80 + "\n")
-    
+
     print("Transferring data to GPU...")
     t_data_gpu = torch.tensor(t_data, dtype=torch.float32, device=device)
-    x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)
+    if is_discrete_social and n_trajectories > 1:
+        x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [K, T, N, D]
+        x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [K, T, N, D]
+    else:
+        x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [T, N, D]
+        x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [T, N, D]
     print("Converting hyperedge indices to GPU tensors...")
     all_possible_edges_gpu = {}
     for key in order_keys:
@@ -301,20 +367,36 @@ def train_integral_model(
             all_possible_edges_gpu[key] = torch.empty((0, order_sizes[key]), dtype=torch.long, device=device)
     
     print("Pre-computing coupling tensor Phi and basic dynamics f for all time points...")
-    Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
-    f_all = torch.zeros((n_times, N, state_dim), device=device)
+    if is_discrete_social and n_trajectories > 1:
+        Phi_all = torch.zeros((n_trajectories, n_times, N, state_dim, n_hyperedges), device=device)
+        f_all = torch.zeros((n_trajectories, n_times, N, state_dim), device=device)
+    else:
+        Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
+        f_all = torch.zeros((n_times, N, state_dim), device=device)
     dynamic_params = inspect.signature(HypergraphModel.dynamic_f).parameters
     dynamic_accepts_time = len(dynamic_params) >= 3
-    
-    for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-        x_t = x_data_gpu[t_idx]
-        Phi_all[t_idx] = HypergraphModel.dynamic_phi(
-            x_t, all_possible_edges_gpu, N, device
-        )
-        if dynamic_accepts_time:
-            f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N, t_data_gpu[t_idx])
-        else:
-            f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N)
+
+    if is_discrete_social and n_trajectories > 1:
+        for k in range(n_trajectories):
+            for t_idx in tqdm(range(n_times), desc=f"Precomputing Phi (traj {k+1}/{n_trajectories})", leave=False):
+                x_t = x_data_gpu[k, t_idx]
+                Phi_all[k, t_idx] = HypergraphModel.dynamic_phi(
+                    x_t, all_possible_edges_gpu, N, device
+                )
+                if dynamic_accepts_time:
+                    f_all[k, t_idx] = HypergraphModel.dynamic_f(x_t, N, t_data_gpu[t_idx])
+                else:
+                    f_all[k, t_idx] = HypergraphModel.dynamic_f(x_t, N)
+    else:
+        for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
+            x_t = x_data_gpu[t_idx]
+            Phi_all[t_idx] = HypergraphModel.dynamic_phi(
+                x_t, all_possible_edges_gpu, N, device
+            )
+            if dynamic_accepts_time:
+                f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N, t_data_gpu[t_idx])
+            else:
+                f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N)
     dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
     print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
@@ -340,40 +422,76 @@ def train_integral_model(
     A.requires_grad_(True)
     
     optimizer = optim.Adam([A], lr=lr)
-    
+
+    # use_discrete_residual is true exactly for the social contagion
+    # model, where observations are 0/1 and we use a Bernoulli-style
+    # likelihood rather than an MSE on x.
+    use_discrete_residual = is_discrete_social
+
     # Training loop (with progress bar)
     pbar = tqdm(range(n_epochs), desc="Training Progress", ncols=120)
     for epoch in pbar:
         optimizer.zero_grad()
-        losses = []
-        
-        for _ in range(batch_size):
-            idx_i, idx_j = np.random.choice(n_times, size=2, replace=False)
-            if idx_i > idx_j:
-                idx_i, idx_j = idx_j, idx_i
-            
-            x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, D]
-            
-            lhs = x_j - x_i  # [N, D]
-            f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, D]
-            Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
-            dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
-            integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, D]
-            Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
-            integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, D]
-            
-            residual = lhs - integral_f - integral_phi_A
-            loss = torch.mean(residual ** 2)
-            losses.append(loss)
-        
-        total_loss = torch.mean(torch.stack(losses))
-        
+
+        if use_discrete_residual:
+            # Discrete-time Bernoulli likelihood on Euler-step probabilities.
+            # Multi-trajectory case: x_data_gpu/x_target_gpu and Phi_all/f_all
+            # carry an explicit leading trajectory dimension.
+            if is_discrete_social and n_trajectories > 1:
+                # x_curr: [K, T-1, N, D]
+                x_curr = x_data_gpu[:, :-1]
+                y_next = x_target_gpu[:, 1:]
+                dt_view = dt_all.view(1, -1, 1, 1)
+                f_curr = f_all[:, :-1]              # [K, T-1, N, D]
+                Phi_curr = Phi_all[:, :-1]          # [K, T-1, N, D, E]
+                PhiA_curr = torch.einsum('ktnie,el->ktni', Phi_curr, A)  # [K, T-1, N, D]
+                incr_pred = dt_view * (f_curr + PhiA_curr)
+                p_next = x_curr + incr_pred
+            else:
+                # Single trajectory (K=1) as before
+                x_curr = x_data_gpu[:-1]          # [T-1, N, D]
+                y_next = x_target_gpu[1:]         # [T-1, N, D]
+                dt_view = dt_all.view(-1, 1, 1)   # [T-1, 1, 1]
+                f_curr = f_all[:-1]               # [T-1, N, D]
+                Phi_curr = Phi_all[:-1]           # [T-1, N, D, E]
+                PhiA_curr = torch.einsum('tnie,el->tni', Phi_curr, A)  # [T-1, N, D]
+                incr_pred = dt_view * (f_curr + PhiA_curr)
+                p_next = x_curr + incr_pred
+
+            p_next = torch.clamp(p_next, 1e-4, 1.0 - 1e-4)
+            # Binary cross-entropy: -[y log p + (1-y) log(1-p)]
+            bce = -(y_next * torch.log(p_next) + (1.0 - y_next) * torch.log(1.0 - p_next))
+            total_loss = bce.mean()
+        else:
+            # Original integral formulation over random time intervals
+            losses = []
+            for _ in range(batch_size):
+                idx_i, idx_j = np.random.choice(n_times, size=2, replace=False)
+                if idx_i > idx_j:
+                    idx_i, idx_j = idx_j, idx_i
+
+                x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, D]
+
+                lhs = x_j - x_i  # [N, D]
+                f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, D]
+                Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
+                dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
+                integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, D]
+                Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
+                integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, D]
+
+                residual = lhs - integral_f - integral_phi_A
+                loss = torch.mean(residual ** 2)
+                losses.append(loss)
+
+            total_loss = torch.mean(torch.stack(losses))
+
         total_loss.backward()
         optimizer.step()
-        
+
         with torch.no_grad():
             A.clamp_(-2.0, 2.0)
-        
+
         pbar.set_postfix({
             'loss': f'{total_loss.item():.6f}'
         })
@@ -419,6 +537,8 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--noise', type=float, default=0.0)
+    parser.add_argument('--n_trajectories', type=int, default=1,
+                        help='Number of independent trajectories on the same hypergraph (social contagion model only)')
     args = parser.parse_args()
     
     defaults = HypergraphModel.get_default_params()
@@ -434,7 +554,8 @@ if __name__ == "__main__":
         gpu_id=args.gpu_id,
         use_nn=True,
         n_samples=args.n_samples,
-        noise=args.noise
+        noise=args.noise,
+        n_trajectories=args.n_trajectories,
     )
     
     print("\nComputing AUC scores...")

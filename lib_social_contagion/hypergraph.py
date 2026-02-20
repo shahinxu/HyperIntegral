@@ -1,7 +1,3 @@
-"""
-Hypergraph-style interface for social contagion.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -160,8 +156,18 @@ class HypergraphModel:
         return edges, triangles
 
     @staticmethod
-    def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 100, noise: float = 0.0):
-        params = HypergraphModel.SCMParams(n_nodes=n_nodes, t_max=50)
+    def generate_training_data(
+        n_nodes: int,
+        edge_config: dict,
+        n_samples: int = 100,
+        noise: float = 0.0,
+        seed: int | None = None,
+    ):
+        # Allow overriding the SCM seed so that multiple independent
+        # trajectories can be generated on the same underlying
+        # hypergraph by varying the random seed.
+        scm_seed = 123 if seed is None else seed
+        params = HypergraphModel.SCMParams(n_nodes=n_nodes, t_max=50, seed=scm_seed)
         complex_dict = {
             "edges": [],
             "triangles": [],

@@ -27,6 +27,7 @@ class HypergraphModel:
         target_incidence_per_node_order2: int = 5
         target_incidence_per_node_order3: int = 5
         target_incidence_per_node_order4: int = 5
+        target_incidence_per_node_order5: int = 5
 
         producer_growth_mean: float = 1.20
         producer_growth_std: float = 0.05
@@ -40,9 +41,10 @@ class HypergraphModel:
         primary_immigration: float = 0.0
         secondary_immigration: float = 0.0
 
-        w2: float = 0.0006
-        w3: float = 0.0008
-        w4: float = 0.0010
+        w2: float = 0.1
+        w3: float = 0.2
+        w4: float = 0.30
+        w5: float = 0.40
 
         target_prey_per_primary: int = 2
         target_prey_per_secondary: int = 2
@@ -145,6 +147,12 @@ class HypergraphModel:
             target_incidence_per_node=params.target_incidence_per_node_order4,
             rng=rng,
         )
+        edges5 = HypergraphModel._sample_sparse_hyperedges(
+            n=params.n_species,
+            order=5,
+            target_incidence_per_node=params.target_incidence_per_node_order5,
+            rng=rng,
+        )
 
         pred_edges = HypergraphModel._build_predation_edges(params, rng)
         producers, primary, secondary = HypergraphModel._build_trophic_groups(params)
@@ -154,6 +162,7 @@ class HypergraphModel:
             "edges2": edges2,
             "edges3": edges3,
             "edges4": edges4,
+            "edges5": edges5,
             "pred_edges": pred_edges,
             "producers": producers,
             "primary": primary,
@@ -216,6 +225,9 @@ class HypergraphModel:
         dx += HypergraphModel._hyperedge_competition_term(x, hypergraph["edges2"], params.w2)
         dx += HypergraphModel._hyperedge_competition_term(x, hypergraph["edges3"], params.w3)
         dx += HypergraphModel._hyperedge_competition_term(x, hypergraph["edges4"], params.w4)
+        # 5th-order competition (if present)
+        if "edges5" in hypergraph:
+            dx += HypergraphModel._hyperedge_competition_term(x, hypergraph["edges5"], params.w5)
 
         dx += HypergraphModel._predation_term(x, hypergraph["pred_edges"], params.half_sat)
 
@@ -320,6 +332,98 @@ class HypergraphModel:
         return dx
 
     @staticmethod
+    def dynamic_f_batch(
+        x: torch.Tensor,
+        n_nodes: int,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        """Vectorized ecological baseline dynamics for a batch of time points.
+
+        This matches dynamic_f but operates on x with shape [T, n_nodes]
+        (or [T, n_nodes, 1]) and t with shape [T] or [T, 1].
+        Competition hyperedges are intentionally excluded here and are
+        handled separately via the topology-dependent competition term.
+        """
+        if HypergraphModel._cached_params is None or HypergraphModel._cached_hypergraph is None:
+            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
+
+        params = HypergraphModel._cached_params
+        hypergraph = HypergraphModel._cached_hypergraph
+
+        if x.ndim == 3:
+            # [T, n_nodes, 1] -> [T, n_nodes]
+            x_flat = x[:, :, 0]
+        else:
+            x_flat = x
+
+        if x_flat.shape[1] != n_nodes:
+            raise ValueError(f"n_nodes mismatch: got {n_nodes}, but x has {x_flat.shape[1]} columns")
+
+        if t.ndim > 1:
+            t_flat = t.squeeze(-1)
+        else:
+            t_flat = t
+
+        device = x_flat.device
+        dtype = x_flat.dtype
+
+        producers = torch.as_tensor(hypergraph["producers"], device=device, dtype=torch.long)
+        primary = torch.as_tensor(hypergraph["primary"], device=device, dtype=torch.long)
+        secondary = torch.as_tensor(hypergraph["secondary"], device=device, dtype=torch.long)
+        growth_rates = torch.as_tensor(hypergraph["growth_rates"], device=device, dtype=dtype)
+
+        T = x_flat.shape[0]
+        dx = torch.zeros_like(x_flat)
+
+        # Seasonal modulation
+        if params.season_amplitude != 0.0:
+            seasonal = 1.0 + params.season_amplitude * torch.sin(
+                2.0 * torch.pi * t_flat.to(dtype) / params.season_period
+            )
+        else:
+            seasonal = torch.ones_like(t_flat, dtype=dtype, device=device)
+
+        # Producers: logistic growth + replenish
+        if producers.numel() > 0:
+            x_p = x_flat[:, producers]  # [T, n_producers]
+            r = growth_rates.view(1, -1)  # [1, n_producers]
+            seasonal_p = seasonal.view(T, 1)
+            dx[:, producers] += seasonal_p * r * x_p * (
+                1.0 - x_p / params.producer_carrying_capacity
+            )
+            dx[:, producers] += params.producer_replenish * (1.0 - x_p)
+
+        # Primary & secondary consumers: mortality + immigration
+        if primary.numel() > 0:
+            x_c1 = x_flat[:, primary]
+            dx[:, primary] -= params.primary_mortality * x_c1
+            dx[:, primary] += params.primary_immigration
+        if secondary.numel() > 0:
+            x_c2 = x_flat[:, secondary]
+            dx[:, secondary] -= params.secondary_mortality * x_c2
+            dx[:, secondary] += params.secondary_immigration
+
+        # Predation term, vectorized over all predator-prey pairs
+        pred_edges = hypergraph["pred_edges"]
+        if len(pred_edges) > 0:
+            prey_idx = torch.tensor([int(e[0]) for e in pred_edges], device=device, dtype=torch.long)
+            pred_idx = torch.tensor([int(e[1]) for e in pred_edges], device=device, dtype=torch.long)
+            attack = torch.tensor([float(e[2]) for e in pred_edges], device=device, dtype=dtype).view(1, -1)
+            eta = torch.tensor([float(e[3]) for e in pred_edges], device=device, dtype=dtype).view(1, -1)
+
+            x_prey = x_flat[:, prey_idx]      # [T, E]
+            x_pred = x_flat[:, pred_idx]      # [T, E]
+            flux = attack * x_pred * x_prey   # [T, E]
+
+            prey_idx_exp = prey_idx.unsqueeze(0).expand(T, -1)  # [T, E]
+            pred_idx_exp = pred_idx.unsqueeze(0).expand(T, -1)  # [T, E]
+
+            dx.scatter_add_(1, prey_idx_exp, -flux)
+            dx.scatter_add_(1, pred_idx_exp, eta * flux)
+
+        return dx
+
+    @staticmethod
     def dynamic_phi(
         x: torch.Tensor,
         all_possible_edges: dict,
@@ -381,10 +485,32 @@ class HypergraphModel:
             Phi[l_idx, 0, edge_range] = -params.w4 * prod
             edge_idx += quads.shape[0]
 
+        quints = all_possible_edges.get("quints")
+        if quints is not None and len(quints) > 0:
+            i_idx = quints[:, 0]
+            j_idx = quints[:, 1]
+            k_idx = quints[:, 2]
+            l_idx = quints[:, 3]
+            m_idx = quints[:, 4]
+            prod = (
+                x_flat[i_idx]
+                * x_flat[j_idx]
+                * x_flat[k_idx]
+                * x_flat[l_idx]
+                * x_flat[m_idx]
+            )
+            edge_range = edge_idx + torch.arange(quints.shape[0], device=device)
+            Phi[i_idx, 0, edge_range] = -params.w5 * prod
+            Phi[j_idx, 0, edge_range] = -params.w5 * prod
+            Phi[k_idx, 0, edge_range] = -params.w5 * prod
+            Phi[l_idx, 0, edge_range] = -params.w5 * prod
+            Phi[m_idx, 0, edge_range] = -params.w5 * prod
+            edge_idx += quints.shape[0]
+
         return Phi
 
     @staticmethod
-    def get_hyperedge_config(n_nodes: int, max_order: int = 4, seed: int = 42) -> dict:
+    def get_hyperedge_config(n_nodes: int, max_order: int = 5, seed: int = 42) -> dict:
         n_producers = max(1, n_nodes // 3)
         n_primary = max(1, n_nodes // 3)
         n_secondary = max(1, n_nodes - n_producers - n_primary)
@@ -403,16 +529,18 @@ class HypergraphModel:
         edges2 = result["edges2"]
         edges3 = result["edges3"]
         edges4 = result["edges4"]
+        edges5 = result.get("edges5", [])
 
         edges_1b = [[i + 1, j + 1] for i, j in edges2]
         triangles_1b = [[i + 1, j + 1, k + 1] for i, j, k in edges3]
         quads_1b = [[i + 1, j + 1, k + 1, l + 1] for i, j, k, l in edges4]
+        quints_1b = [[i + 1, j + 1, k + 1, l + 1, m + 1] for i, j, k, l, m in edges5]
 
         return {
             "edges": edges_1b if max_order >= 2 else [],
             "triangles": triangles_1b if max_order >= 3 else [],
             "quads": quads_1b if max_order >= 4 else [],
-            "quints": [],
+            "quints": quints_1b if max_order >= 5 else [],
             "sexts": [],
             "septs": [],
         }
@@ -436,7 +564,10 @@ class HypergraphModel:
         else:
             all_possible["quads"] = []
 
-        all_possible["quints"] = []
+        if max_order >= 5:
+            all_possible["quints"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 5)]
+        else:
+            all_possible["quints"] = []
         all_possible["sexts"] = []
         all_possible["septs"] = []
 
@@ -474,5 +605,5 @@ class HypergraphModel:
     def get_default_params() -> dict:
         return {
             "n_nodes": 9,
-            "max_order": 4,
+            "max_order": 5,
         }
