@@ -171,7 +171,9 @@ class HypergraphModel:
         complex_dict = {
             "edges": [],
             "triangles": [],
-            "nodes": np.arange(n_nodes)
+            "quads": [],
+            "quints": [],
+            "nodes": np.arange(n_nodes),
         }
         
         if "edges" in edge_config:
@@ -191,6 +193,26 @@ class HypergraphModel:
                     complex_dict["triangles"] = (t_arr - 1).tolist()
                 else:
                     complex_dict["triangles"] = t_list
+
+        # Optional 4-body (quad) interactions in the ground-truth
+        if "quads" in edge_config:
+            q_list = edge_config["quads"]
+            if len(q_list) > 0:
+                q_arr = np.array(q_list)
+                if q_arr.min() >= 1:
+                    complex_dict["quads"] = (q_arr - 1).tolist()
+                else:
+                    complex_dict["quads"] = q_list
+
+        # Optional 5-body interactions in the ground-truth
+        if "quints" in edge_config:
+            p5_list = edge_config["quints"]
+            if len(p5_list) > 0:
+                p5_arr = np.array(p5_list)
+                if p5_arr.min() >= 1:
+                    complex_dict["quints"] = (p5_arr - 1).tolist()
+                else:
+                    complex_dict["quints"] = p5_list
 
         result = HypergraphModel._simulate(params, complex_dict, n_steps=n_samples)
         HypergraphModel._cached_edges = complex_dict["edges"]
@@ -213,6 +235,8 @@ class HypergraphModel:
         x: np.ndarray,
         edges: list[list[int]],
         triangles: list[list[int]],
+        quads: list[list[int]],
+        quints: list[list[int]],
         params: "HypergraphModel.SCMParams",
     ) -> np.ndarray:
         
@@ -225,11 +249,34 @@ class HypergraphModel:
                 infection_force[i] += params.beta * x[j]
                 infection_force[j] += params.beta * x[i]
 
+        # 3-body (triangle) force
         if triangles:
             for i, j, k in triangles:
                 infection_force[i] += params.beta_delta * (x[j] * x[k])
                 infection_force[j] += params.beta_delta * (x[i] * x[k])
                 infection_force[k] += params.beta_delta * (x[i] * x[j])
+
+        # 4-body (quad) force – symmetric in all four nodes, using
+        # beta_delta as the scale (consistent with dynamic_phi).
+        if quads:
+            for i, j, k, l in quads:
+                prod_jkl = x[j] * x[k] * x[l]
+                prod_ikl = x[i] * x[k] * x[l]
+                prod_ijl = x[i] * x[j] * x[l]
+                prod_ijk = x[i] * x[j] * x[k]
+                infection_force[i] += params.beta_delta * prod_jkl
+                infection_force[j] += params.beta_delta * prod_ikl
+                infection_force[k] += params.beta_delta * prod_ijl
+                infection_force[l] += params.beta_delta * prod_ijk
+
+        # 5-body (quint) force – symmetric in all five nodes, using beta_delta.
+        if quints:
+            for i, j, k, l, m in quints:
+                infection_force[i] += params.beta_delta * (x[j] * x[k] * x[l] * x[m])
+                infection_force[j] += params.beta_delta * (x[i] * x[k] * x[l] * x[m])
+                infection_force[k] += params.beta_delta * (x[i] * x[j] * x[l] * x[m])
+                infection_force[l] += params.beta_delta * (x[i] * x[j] * x[k] * x[m])
+                infection_force[m] += params.beta_delta * (x[i] * x[j] * x[k] * x[l])
 
         dx = -params.mu * x + (1.0 - x) * infection_force
         return dx
@@ -250,9 +297,11 @@ class HypergraphModel:
 
         edges = complex_dict["edges"]
         triangles = complex_dict["triangles"]
+        quads = complex_dict.get("quads", [])
+        quints = complex_dict.get("quints", [])
 
         sol = solve_ivp(
-            fun=lambda t, x: HypergraphModel._rhs(t, x, edges, triangles, params),
+            fun=lambda t, x: HypergraphModel._rhs(t, x, edges, triangles, quads, quints, params),
             t_span=(0, params.t_max),
             y0=x0,
             t_eval=t_eval,
@@ -304,7 +353,7 @@ class HypergraphModel:
         
         params = HypergraphModel.SCMParams()
         n_total = 0
-        for key in ["edges", "triangles"]:
+        for key in ["edges", "triangles", "quads", "quints"]:
             n_total += len(all_possible_edges.get(key, []))
 
         if x.ndim == 1:
@@ -360,6 +409,59 @@ class HypergraphModel:
             
             edge_idx += num_tris
 
+        # 3. Candidate 4-body interactions (quads)
+        # These are included as additional basis functions for inference;
+        # the current simulator _rhs does not use them, so in ground truth
+        # their weights are effectively zero.
+        quads = all_possible_edges.get("quads", [])
+        if len(quads) > 0:
+            quads_t = torch.as_tensor(quads, dtype=torch.long, device=device)
+            num_quads = quads_t.shape[0]
+            i_idx = quads_t[:, 0]
+            j_idx = quads_t[:, 1]
+            k_idx = quads_t[:, 2]
+            l_idx = quads_t[:, 3]
+            feature_range = edge_idx + torch.arange(num_quads, device=device)
+
+            # Use beta_delta as scale for 4-body terms as well
+            term_i = params.beta_delta * susceptible[i_idx] * (x_vec[j_idx] * x_vec[k_idx] * x_vec[l_idx])
+            term_j = params.beta_delta * susceptible[j_idx] * (x_vec[i_idx] * x_vec[k_idx] * x_vec[l_idx])
+            term_k = params.beta_delta * susceptible[k_idx] * (x_vec[i_idx] * x_vec[j_idx] * x_vec[l_idx])
+            term_l = params.beta_delta * susceptible[l_idx] * (x_vec[i_idx] * x_vec[j_idx] * x_vec[k_idx])
+
+            Phi[i_idx, 0, feature_range] = term_i
+            Phi[j_idx, 0, feature_range] = term_j
+            Phi[k_idx, 0, feature_range] = term_k
+            Phi[l_idx, 0, feature_range] = term_l
+
+            edge_idx += num_quads
+
+        # 4. Candidate 5-body interactions (quints)
+        quints = all_possible_edges.get("quints", [])
+        if len(quints) > 0:
+            quints_t = torch.as_tensor(quints, dtype=torch.long, device=device)
+            num_quints = quints_t.shape[0]
+            i_idx = quints_t[:, 0]
+            j_idx = quints_t[:, 1]
+            k_idx = quints_t[:, 2]
+            l_idx = quints_t[:, 3]
+            m_idx = quints_t[:, 4]
+            feature_range = edge_idx + torch.arange(num_quints, device=device)
+
+            term_i = params.beta_delta * susceptible[i_idx] * (x_vec[j_idx] * x_vec[k_idx] * x_vec[l_idx] * x_vec[m_idx])
+            term_j = params.beta_delta * susceptible[j_idx] * (x_vec[i_idx] * x_vec[k_idx] * x_vec[l_idx] * x_vec[m_idx])
+            term_k = params.beta_delta * susceptible[k_idx] * (x_vec[i_idx] * x_vec[j_idx] * x_vec[l_idx] * x_vec[m_idx])
+            term_l = params.beta_delta * susceptible[l_idx] * (x_vec[i_idx] * x_vec[j_idx] * x_vec[k_idx] * x_vec[m_idx])
+            term_m = params.beta_delta * susceptible[m_idx] * (x_vec[i_idx] * x_vec[j_idx] * x_vec[k_idx] * x_vec[l_idx])
+
+            Phi[i_idx, 0, feature_range] = term_i
+            Phi[j_idx, 0, feature_range] = term_j
+            Phi[k_idx, 0, feature_range] = term_k
+            Phi[l_idx, 0, feature_range] = term_l
+            Phi[m_idx, 0, feature_range] = term_m
+
+            edge_idx += num_quints
+
         return Phi
 
     @staticmethod
@@ -376,6 +478,23 @@ class HypergraphModel:
                 "edges": [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8]],
                 "triangles": [[1, 2, 3], [2, 4, 5], [5, 6, 7], [6, 7, 8]],
             }
+            # Hand-crafted 4-body interactions for the 8-node toy
+            # example when max_order >= 4 so that order-4 has actual
+            # positive samples to learn.
+            if max_order >= 4:
+                config["quads"] = [
+                    [1, 2, 3, 4],
+                    [2, 3, 4, 5],
+                    [4, 5, 6, 7],
+                    [5, 6, 7, 8],
+                ]
+            if max_order >= 5:
+                config["quints"] = [
+                    [1, 2, 3, 4, 5],
+                    [2, 3, 4, 5, 6],
+                    [3, 4, 5, 6, 7],
+                    [4, 5, 6, 7, 8],
+                ]
         else:
             params = HypergraphModel.RSCParams(
                 n_nodes=n_nodes,
@@ -400,6 +519,8 @@ class HypergraphModel:
         return {
             "edges": config["edges"] if max_order >= 2 else [],
             "triangles": config["triangles"] if max_order >= 3 else [],
+            "quads": config.get("quads", []) if max_order >= 4 else [],
+            "quints": config.get("quints", []) if max_order >= 5 else [],
         }
 
     @staticmethod
@@ -415,6 +536,16 @@ class HypergraphModel:
             all_possible["triangles"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
         else:
             all_possible["triangles"] = []
+
+        if max_order >= 4:
+            all_possible["quads"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 4)]
+        else:
+            all_possible["quads"] = []
+
+        if max_order >= 5:
+            all_possible["quints"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 5)]
+        else:
+            all_possible["quints"] = []
 
         return all_possible
 

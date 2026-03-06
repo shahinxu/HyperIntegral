@@ -8,11 +8,17 @@ from datetime import datetime
 from tqdm import tqdm
 import argparse
 import inspect
+import sys
+from pathlib import Path
 
-# from lib_rossler_oscillator.hypergraph import HypergraphModel
-# from lib_ecological_dynamics.hypergraph import HypergraphModel
-# from lib_neuronal_synchronization.hypergraph import HypergraphModel
-from lib_social_contagion.hypergraph import HypergraphModel
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from hyperpinn_unified.scene_registry import get_scene_model
+from hyperpinn_unified.outputs import write_standard_summary
+
+HypergraphModel = None
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.0):
         super().__init__()
@@ -170,6 +176,7 @@ def train_integral_model(
     n_samples=11,
     noise=0.0,
     n_trajectories: int = 1,
+    results_root: str = "results_integral_linear",
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -229,7 +236,7 @@ def train_integral_model(
             print(f"Added Gaussian noise with std={noise}")
         # For simplicity, in multi-trajectory mode we skip extra linear
         # resampling and work directly on the native ODE grid.
-        save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = f"{results_root}/sample_{n_samples}_noise_{noise}/" + datetime.now().strftime("%Y%m%d_%H%M%S")
         os.makedirs(save_dir, exist_ok=True)
         # Targets are the original 0/1 observations; inputs can be smoothed.
         x_target = x_data_multi.copy()
@@ -304,7 +311,7 @@ def train_integral_model(
             
             plt.tight_layout()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/{timestamp}"
+            save_dir = f"{results_root}/sample_{n_samples}_noise_{noise}/{timestamp}"
             os.makedirs(save_dir, exist_ok=True)
             plt.savefig(os.path.join(save_dir, 'linear_vs_original.png'), dpi=150, bbox_inches='tight')
             plt.close()
@@ -346,7 +353,7 @@ def train_integral_model(
             x_data = x_smooth
         # Set up a default save_dir for this run
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_dir = f"results_integral_linear/sample_{n_samples}_noise_{noise}/{timestamp}"
+        save_dir = f"{results_root}/sample_{n_samples}_noise_{noise}/{timestamp}"
         os.makedirs(save_dir, exist_ok=True)
 
     print("Transferring data to GPU...")
@@ -532,18 +539,24 @@ def train_integral_model(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--scene', type=str, default='neuronal',
+                        choices=['ecological', 'neuronal', 'rossler', 'social'])
     parser.add_argument('--n_samples', type=int, default=300)
     parser.add_argument('--n_epochs', type=int, default=20000)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--noise', type=float, default=0.0)
+    parser.add_argument('--results_root', type=str, default='results_integral_linear')
     parser.add_argument('--n_trajectories', type=int, default=1,
                         help='Number of independent trajectories on the same hypergraph (social contagion model only)')
+    parser.add_argument('--max_order', type=int, default=None,
+                        help='Maximum hyperedge order to use in Integral PINN (default: model library default)')
     args = parser.parse_args()
     
+    HypergraphModel, scene_spec = get_scene_model(args.scene)
     defaults = HypergraphModel.get_default_params()
     N = defaults["n_nodes"]
-    max_order = defaults["max_order"]
+    max_order = args.max_order if args.max_order is not None else defaults["max_order"]
     
     A_learned, edge_config, save_dir = train_integral_model(
         N=N, 
@@ -556,6 +569,7 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         noise=args.noise,
         n_trajectories=args.n_trajectories,
+        results_root=args.results_root,
     )
     
     print("\nComputing AUC scores...")
@@ -569,6 +583,7 @@ if __name__ == "__main__":
             print(f"  {order_label}: N/A (no positive/negative samples)")
     
     with open(f"{save_dir}/auc_scores.txt", 'w') as f:
+        f.write(f"scene={scene_spec.label}, lib={scene_spec.module}\n")
         f.write(f"N={N}, max_order={max_order}, n_samples={args.n_samples}, noise={args.noise}\n")
         f.write("\nAUC Scores:\n")
         for order_label, auc_score in auc_scores.items():
@@ -579,5 +594,21 @@ if __name__ == "__main__":
     
     print("\nPlotting ROC curves...")
     plot_roc_curves(roc_data, auc_scores, save_dir, max_order)
+
+    write_standard_summary(
+        save_dir=save_dir,
+        method="integral_pinn_linear",
+        scene=scene_spec.label,
+        config={
+            "n_nodes": N,
+            "max_order": max_order,
+            "n_samples": args.n_samples,
+            "n_epochs": args.n_epochs,
+            "lr": args.lr,
+            "noise": args.noise,
+            "n_trajectories": args.n_trajectories,
+        },
+        auc_scores=auc_scores,
+    )
     
     print(f"\nResults saved to {save_dir}/")

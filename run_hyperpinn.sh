@@ -14,7 +14,7 @@ do
     
     for i in {1..3}
     do
-        python Rossler_HyperPINN.py \
+        python models/baseline/HyperPINN/HyperPINN_Rossler.py \
             --M $M \
             --tmax $tmax \
             --N $N \

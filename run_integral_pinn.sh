@@ -11,7 +11,8 @@ do
     
     for i in {1}
     do
-        python Rossler_Integral_pinn.py \
+        python models/integral/run.py \
+            --scene rossler \
             --noise $noise \
             --gpu_id $gpu_id \
             --n_samples $M

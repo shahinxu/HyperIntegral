@@ -32,7 +32,7 @@ max_order = args.max_order
 gpu_id = args.gpu_id
 noise = args.noise
 M = args.M
-"""HyperPINN baseline for ecological hypergraph dynamics (no Rossler code)."""
+
 
 # Use ecological dynamics from lib_ecological_dynamics to generate data and ground-truth hyperedges
 edge_config = HypergraphModel.get_hyperedge_config(N, max_order)

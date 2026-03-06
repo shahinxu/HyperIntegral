@@ -21,7 +21,7 @@ from lib_social_contagion.hypergraph import HypergraphModel as SCMHypergraphMode
 parser = argparse.ArgumentParser(description="Run HyperPINN on social contagion hypergraph dynamics")
 parser.add_argument("--M", type=int, default=300, help="Number of time samples")
 parser.add_argument("--N", type=int, default=8, help="Number of nodes")
-parser.add_argument("--max_order", type=int, default=3, help="Maximum hyperedge order (2 or 3 for contagion)")
+parser.add_argument("--max_order", type=int, default=3, help="Maximum hyperedge order (2, 3, or 4 for contagion)")
 parser.add_argument("--gpu_id", type=int, default=0)
 parser.add_argument("--noise", type=float, default=0.0)
 args = parser.parse_args()
@@ -39,39 +39,31 @@ edge_config = SCMHypergraphModel.get_hyperedge_config(N, max_order)
 
 EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") else np.empty((0, 2), dtype=int)
 TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
+QuadList = np.array(edge_config.get("quads", [])) if edge_config.get("quads") else np.empty((0, 4), dtype=int)
 
 all_2edges = list(combinations(range(1, N + 1), 2))
 all_3edges = list(combinations(range(1, N + 1), 3)) if max_order >= 3 else []
-all_4edges = []
+all_4edges = list(combinations(range(1, N + 1), 4)) if max_order >= 4 else []
 all_5edges = []
 all_6edges = []
 all_7edges = []
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
-true_4edges = set()
+true_4edges = set(tuple(sorted(quad)) for quad in QuadList)
 true_5edges = set()
 true_6edges = set()
 true_7edges = set()
 
-# Time series from social contagion simulator (binary observations per node)
 t_eval, X = SCMHypergraphModel.generate_training_data(N, edge_config, n_samples=M, noise=noise)
-# X has shape (T, N, 1)
 state_dim = X.shape[2]
-X_noisy = X  # noise handled inside generate_training_data
-
-# Optionally keep 0/1 and let the NN smooth in time; no extra temporal
-# smoothing is applied here to keep the setup simple.
-
-# Prepare tensors for HyperPINN
+X_noisy = X
 t_data = torch.tensor(t_eval, dtype=torch.float32, requires_grad=True).unsqueeze(1)
 x_data = torch.tensor(X_noisy.reshape(X_noisy.shape[0], -1), dtype=torch.float32)
 
-# Simple ResNet-like architecture (same choice as ecosystem script)
 architectures = [("Pirate", False, False, True)]
 arch_name, use_resnet, use_attention, use_pirate = architectures[0]
 
-# Plot time series for reference
 n_cols = 4
 n_rows = int(np.ceil(N / n_cols))
 plt.figure(figsize=(4 * n_cols, 3 * n_rows))
@@ -205,8 +197,8 @@ if max_order >= 2 and hasattr(model, "edge_indices_t"):
     all_edges_tensors["edges"] = model.edge_indices_t.to(device)
 if max_order >= 3 and hasattr(model, "triangle_indices_t"):
     all_edges_tensors["triangles"] = model.triangle_indices_t.to(device)
-
-# For social contagion we only consider up to triangles
+if max_order >= 4 and hasattr(model, "quad_indices_t"):
+    all_edges_tensors["quads"] = model.quad_indices_t.to(device)
 
 # ---------------------------------------------------------------------------
 # Sparsity and optimizer
@@ -340,9 +332,9 @@ def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
 
         dx/dt ≈ f(x) + Phi(x) @ A,
 
-    where f(x) = -mu * x and Phi(x) is provided by SCMHypergraphModel.dynamic_phi
-    over all candidate edges/triangles, and A is represented by the
-    model's sparse hyperedge weights (edge/triangle probabilities).
+    where f(x) = -mu * x and Phi(x) encodes the contributions of all
+    candidate edges/triangles/quads, and A is represented by the
+    model's sparse hyperedge weights (edge/triangle/quad probabilities).
     """
 
     if not t_data.requires_grad:
@@ -365,11 +357,12 @@ def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
         use_concrete=False, hard=False
     )
 
-    # Build concatenated weight vector A_all matching dynamic_phi's ordering:
-    # first all edges, then all triangles.
+    # Build concatenated weight vector A_all matching the ordering used
+    # below: first all edges, then all triangles, then all quads.
     weights_list = []
     n_edges = 0
     n_tris = 0
+    n_quads = 0
     if max_order >= 2 and edge_probs is not None and "edges" in all_edges_tensors:
         edge_probs = edge_probs.to(device)
         n_edges = edge_probs.shape[0]
@@ -378,6 +371,10 @@ def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
         triangle_probs = triangle_probs.to(device)
         n_tris = triangle_probs.shape[0]
         weights_list.append(triangle_probs)
+    if max_order >= 4 and quad_probs is not None and "quads" in all_edges_tensors:
+        quad_probs = quad_probs.to(device)
+        n_quads = quad_probs.shape[0]
+        weights_list.append(quad_probs)
     # Parameters of the SCM dynamics (mu, beta, beta_delta)
     params = SCMHypergraphModel.SCMParams()
 
@@ -395,6 +392,8 @@ def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
         all_possible_edges["edges"] = all_edges_tensors["edges"]
     if max_order >= 3 and "triangles" in all_edges_tensors:
         all_possible_edges["triangles"] = all_edges_tensors["triangles"]
+    if max_order >= 4 and "quads" in all_edges_tensors:
+        all_possible_edges["quads"] = all_edges_tensors["quads"]
 
     # Vectorized computation of f(x) and Phi(x)A over all time steps.
     # x_all: [T, N]
@@ -460,6 +459,37 @@ def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
         Phi[time_idx, node_k, edge_ids] = term_k
 
         feature_offset += num_tris
+
+    # 3. Quads (4-body interactions)
+    quads = all_possible_edges.get("quads", [])
+    if len(quads) > 0:
+        quads_t = torch.as_tensor(quads, dtype=torch.long, device=device)  # [E4, 4]
+        num_quads = quads_t.shape[0]
+        i_idx = quads_t[:, 0]
+        j_idx = quads_t[:, 1]
+        k_idx = quads_t[:, 2]
+        l_idx = quads_t[:, 3]
+
+        feature_range = feature_offset + torch.arange(num_quads, device=device)  # [E4]
+
+        term_i = params.beta_delta * susceptible[:, i_idx] * (x_all[:, j_idx] * x_all[:, k_idx] * x_all[:, l_idx])
+        term_j = params.beta_delta * susceptible[:, j_idx] * (x_all[:, i_idx] * x_all[:, k_idx] * x_all[:, l_idx])
+        term_k = params.beta_delta * susceptible[:, k_idx] * (x_all[:, i_idx] * x_all[:, j_idx] * x_all[:, l_idx])
+        term_l = params.beta_delta * susceptible[:, l_idx] * (x_all[:, i_idx] * x_all[:, j_idx] * x_all[:, k_idx])
+
+        time_idx = torch.arange(T, device=device)[:, None]            # [T, 1]
+        edge_ids = feature_range[None, :]                             # [1, E4]
+        node_i = i_idx[None, :]
+        node_j = j_idx[None, :]
+        node_k = k_idx[None, :]
+        node_l = l_idx[None, :]
+
+        Phi[time_idx, node_i, edge_ids] = term_i
+        Phi[time_idx, node_j, edge_ids] = term_j
+        Phi[time_idx, node_k, edge_ids] = term_k
+        Phi[time_idx, node_l, edge_ids] = term_l
+
+        feature_offset += num_quads
 
     # Now contract Phi with A_all: [T, N, E_total] @ [E_total] -> [T, N]
     Phi_flat = Phi.view(T * N, E_total)
@@ -565,6 +595,9 @@ for epoch in range(epochs):
         if max_order >= 3:
             auc_3 = compute_auc(y_true_3, y_score_3)
             auc_str += f", AUC (3-edges): {auc_3:.4f}"
+        if max_order >= 4:
+            auc_4 = compute_auc(y_true_4, y_score_4)
+            auc_str += f", AUC (4-edges): {auc_4:.4f}"
         print(auc_str)
 
 # ---------------------------------------------------------------------------
@@ -613,6 +646,10 @@ if max_order >= 3:
     plot_roc(y_true_3, y_score_3, "Third-order")
     y_true_list.append(y_true_3)
     y_score_list.append(y_score_3)
+if max_order >= 4:
+    plot_roc(y_true_4, y_score_4, "Fourth-order")
+    y_true_list.append(y_true_4)
+    y_score_list.append(y_score_4)
 
 if len(y_true_list) > 0:
     y_true_total = np.concatenate(y_true_list)
