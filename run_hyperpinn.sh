@@ -1,25 +1,25 @@
-source /home/rzh/miniconda3/bin/activate resume_attack
+#!/usr/bin/env bash
 
-M=300
-tmax=20
-N=8
-max_order=7
-gpu_id=1
+set -e
 
-for noise in 0.2
-do
-    echo "======================================="
-    echo "Running HyperPINN with noise = $noise"
-    echo "======================================="
-    
-    for i in {1..3}
-    do
-        python models/baseline/HyperPINN/HyperPINN_Rossler.py \
-            --M $M \
-            --tmax $tmax \
-            --N $N \
-            --max_order $max_order \
-            --gpu_id $gpu_id \
-            --noise $noise
-    done
-done
+SCENE=${1:-ecological}
+N_SAMPLES=${2:-300}
+NOISE=${3:-0.0}
+GPU_ID=${4:-0}
+N_NODES=${5:-60}
+MAX_ORDER=${6:-5}
+RESULTS_ROOT=${7:-results/hyperpinn}
+
+echo "======================================="
+echo "Running HyperPINN"
+echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_nodes=${N_NODES}, max_order=${MAX_ORDER}, results_root=${RESULTS_ROOT}"
+echo "======================================="
+
+python -m models.hyperpinn.run \
+  --scene "${SCENE}" \
+  --n_samples "${N_SAMPLES}" \
+  --noise "${NOISE}" \
+  --gpu_id "${GPU_ID}" \
+  --n_nodes "${N_NODES}" \
+  --max_order "${MAX_ORDER}" \
+  --results_root "${RESULTS_ROOT}"

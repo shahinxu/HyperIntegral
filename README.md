@@ -4,7 +4,7 @@ Top-level now follows a unified structure:
 
 - `models/`: all model entrypoints and unified launchers
 - `lib_*/`: scene/data-generation libraries
-- `results*/`: experiment outputs
+- `results/`: experiment outputs (unified)
 - `run_*.sh`: convenience shell runners
 - `*.md`: docs
 
@@ -29,5 +29,5 @@ with a common argument interface (unused args are ignored by methods that do not
 
 - Top-level compatibility wrappers have been removed.
 - HyperPINN model files are under `models/baseline/HyperPINN/`.
-- HyperPINN outputs are in top-level `results_hyperpinn*` directories.
+- All outputs are organized as `results/<method>/<scene>/sample_<n>_noise_<x>/<timestamp>/`.
 - Use `python models/run_unified.py ...` or scripts under `models/*` directly.

@@ -11,8 +11,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 THIS_ROOT = Path(__file__).resolve().parent
 
-from hyperpinn_unified.outputs import write_standard_summary
-from hyperpinn_unified.scene_registry import SCENE_REGISTRY
+from hypergraph.outputs import write_standard_summary
+from hypergraph.scene_registry import SCENE_REGISTRY
 
 
 SCENE_TO_SCRIPT = {

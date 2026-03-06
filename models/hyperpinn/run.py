@@ -11,8 +11,8 @@ HYPERPINN_ROOT = BASELINE_ROOT / "HyperPINN"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from hyperpinn_unified.outputs import write_standard_summary
-from hyperpinn_unified.scene_registry import SCENE_REGISTRY
+from hypergraph.outputs import write_standard_summary
+from hypergraph.scene_registry import SCENE_REGISTRY
 
 
 SCENE_TO_SCRIPT = {
@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--n_epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--n_trajectories", type=int, default=1)
-    parser.add_argument("--results_root", type=str, default="results_hyperpinn")
+    parser.add_argument("--results_root", type=str, default="results/hyperpinn")
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
@@ -70,7 +70,10 @@ def main():
         cmd.extend(["--max_order", str(args.max_order)])
 
     # Run from project root so HyperPINN writes results into top-level results_* directories.
-    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True)
+    env = os.environ.copy()
+    env["HYPERPINN_RESULTS_ROOT"] = args.results_root
+
+    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, env=env)
     print(proc.stdout)
     if proc.returncode != 0:
         print(proc.stderr, file=sys.stderr)

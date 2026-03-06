@@ -1,116 +1,29 @@
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from HyperPINNTopology import HyperPINNTopology
 import torch
 from torch import optim as optim
 import numpy as np
-from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from itertools import combinations
-import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
-import os
 from datetime import datetime
 import networkx as nx
 import argparse
 
-def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList):
-    m1 = len(x)
-    N = m1 // 3
-    xold = x[0:N]
-    yold = x[N:2*N]
-    zold = x[2*N:3*N]
-    ar, br, cr = 0.2, 0.2, 0.7
-    k, kD = 0.4, 0.3
+from lib_ecological_dynamics.hypergraph import HypergraphModel
 
-    coup_rete = np.zeros(N)
-    coup_simplicial = np.zeros(N)
-    coup_quads = np.zeros(N)
-    coup_quints = np.zeros(N)
-    coup_sexts = np.zeros(N)
-    coup_septs = np.zeros(N)
-    
-    for ii in range(len(EdgeList)):
-        i1 = EdgeList[ii, 0] - 1
-        i2 = EdgeList[ii, 1] - 1
-        coup_rete[i1] += xold[i2] - xold[i1]
-        coup_rete[i2] += xold[i1] - xold[i2]
-    
-    mtrianglelist, _ = TriangleList.shape
-    for ii in range(mtrianglelist):
-        i1 = TriangleList[ii, 0] - 1
-        i2 = TriangleList[ii, 1] - 1
-        i3 = TriangleList[ii, 2] - 1
-        coup_simplicial[i1] += xold[i2]**2 * xold[i3] - xold[i1]**3 + xold[i2] * xold[i3]**2 - xold[i1]**3
-        coup_simplicial[i2] += xold[i1]**2 * xold[i3] - xold[i2]**3 + xold[i1] * xold[i3]**2 - xold[i2]**3
-        coup_simplicial[i3] += xold[i1]**2 * xold[i2] - xold[i3]**3 + xold[i1] * xold[i2]**2 - xold[i3]**3
-    
-    mquadlist, nquadlist = QuadList.shape
-    for ii in range(mquadlist):
-        i1 = QuadList[ii, 0] - 1
-        i2 = QuadList[ii, 1] - 1
-        i3 = QuadList[ii, 2] - 1
-        i4 = QuadList[ii, 3] - 1
-        coup_quads[i1] += xold[i2]**2 * xold[i3] * xold[i4] - xold[i1]**3
-        coup_quads[i2] += xold[i1]**2 * xold[i3] * xold[i4] - xold[i2]**3
-        coup_quads[i3] += xold[i1]**2 * xold[i2] * xold[i4] - xold[i3]**3
-        coup_quads[i4] += xold[i1]**2 * xold[i2] * xold[i3] - xold[i4]**3
-    
-    mquintlist, nquintlist = QuintList.shape
-    for ii in range(mquintlist):
-        i1 = QuintList[ii, 0] - 1
-        i2 = QuintList[ii, 1] - 1
-        i3 = QuintList[ii, 2] - 1
-        i4 = QuintList[ii, 3] - 1
-        i5 = QuintList[ii, 4] - 1
-        coup_quints[i1] += yold[i2]**2 * yold[i3] * yold[i4] * yold[i5] - yold[i1]**3
-        coup_quints[i2] += yold[i1]**2 * yold[i3] * yold[i4] * yold[i5] - yold[i2]**3
-        coup_quints[i3] += yold[i1]**2 * yold[i2] * yold[i4] * yold[i5] - yold[i3]**3
-        coup_quints[i4] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i5] - yold[i4]**3
-        coup_quints[i5] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] - yold[i5]**3
-    
-    msextlist, nsextlist = SextList.shape
-    for ii in range(msextlist):
-        i1 = SextList[ii, 0] - 1
-        i2 = SextList[ii, 1] - 1
-        i3 = SextList[ii, 2] - 1
-        i4 = SextList[ii, 3] - 1
-        i5 = SextList[ii, 4] - 1
-        i6 = SextList[ii, 5] - 1
-        coup_sexts[i1] += yold[i2]**2 * yold[i3] * yold[i4] * yold[i5] * yold[i6] - yold[i1]**3
-        coup_sexts[i2] += yold[i1]**2 * yold[i3] * yold[i4] * yold[i5] * yold[i6] - yold[i2]**3
-        coup_sexts[i3] += yold[i1]**2 * yold[i2] * yold[i4] * yold[i5] * yold[i6] - yold[i3]**3
-        coup_sexts[i4] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i5] * yold[i6] - yold[i4]**3
-        coup_sexts[i5] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] * yold[i6] - yold[i5]**3
-        coup_sexts[i6] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] * yold[i5] - yold[i6]**3
-    
-    mseptlist, nseptlist = SeptList.shape
-    for ii in range(mseptlist):
-        i1 = SeptList[ii, 0] - 1
-        i2 = SeptList[ii, 1] - 1
-        i3 = SeptList[ii, 2] - 1
-        i4 = SeptList[ii, 3] - 1
-        i5 = SeptList[ii, 4] - 1
-        i6 = SeptList[ii, 5] - 1
-        i7 = SeptList[ii, 6] - 1
-        coup_septs[i1] += zold[i2]**2 * zold[i3] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i1]**3
-        coup_septs[i2] += zold[i1]**2 * zold[i3] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i2]**3
-        coup_septs[i3] += zold[i1]**2 * zold[i2] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i3]**3
-        coup_septs[i4] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i5] * zold[i6] * zold[i7] - zold[i4]**3
-        coup_septs[i5] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i6] * zold[i7] - zold[i5]**3
-        coup_septs[i6] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i5] * zold[i7] - zold[i6]**3
-        coup_septs[i7] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i5] * zold[i6] - zold[i7]**3
-    
-    dxdt1 = -yold - zold + k * coup_rete + kD * coup_simplicial + kD * coup_quads
-    dydt1 = xold + ar * yold + kD * coup_quints + kD * coup_sexts
-    dzdt1 = br + zold * (xold - cr) + kD * coup_septs
-    dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
-    return dxdt
-
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Run Rossler Oscillators with HyperPINN')
-parser.add_argument('--M', type=int, default=300)
-parser.add_argument('--tmax', type=float, default=20)
-parser.add_argument('--N', type=int, default=8)
-parser.add_argument('--max_order', type=int, default=7)
+# Parse command-line arguments (ecological dynamics only)
+parser = argparse.ArgumentParser(description='Run HyperPINN on ecological hypergraph dynamics')
+parser.add_argument('--M', type=int, default=300, help='Number of time samples')
+parser.add_argument('--N', type=int, default=8, help='Number of species')
+parser.add_argument('--max_order', type=int, default=3)
 parser.add_argument('--gpu_id', type=int, default=4)
 parser.add_argument('--noise', type=float, default=0.0)
 args = parser.parse_args()
@@ -119,79 +32,32 @@ N = args.N
 max_order = args.max_order
 gpu_id = args.gpu_id
 noise = args.noise
+M = args.M
 
-def get_hyperedge_config(N):
-    configs = {
-        8: {
-            'edges': [[1, 2],[2, 3],[3, 4],[5, 6],[6, 7],[7, 8]],
-            'triangles': [[1, 2, 3],[2, 4, 5],[5, 6, 7],[6, 7, 8]],
-            'quads': [[1, 2, 3, 4]],
-            'quints': [[4, 5, 6, 7, 8]],
-            'sexts': [[1, 2, 3, 4, 5, 6]],
-            'septs': [[3, 2, 4, 5, 6, 7, 8]]
-        },
-        10: {
-            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [8, 9]],
-            'triangles': [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
-            'quads': [[1, 2, 3, 4], [7, 8, 9, 10]],
-            'quints': [[2, 3, 4, 5, 6]],
-            'sexts': [[3, 4, 5, 6, 7, 8]],
-            'septs': [[1, 2, 4, 6, 7, 9, 10]]
-        },
-        12: {
-            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [9, 10], [11, 12]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [9, 10, 11]],
-            'quads': [[1, 2, 3, 4], [9, 10, 11, 12]],
-            'quints': [[3, 4, 5, 6, 7]],
-            'sexts': [[5, 6, 7, 8, 9, 10]],
-            'septs': [[1, 3, 5, 7, 9, 11, 12]]
-        },
-        14: {
-            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [7, 8], [10, 11], [12, 13]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
-            'quads': [[1, 2, 3, 4], [11, 12, 13, 14]],
-            'quints': [[4, 5, 6, 7, 8]],
-            'sexts': [[7, 8, 9, 10, 11, 12]],
-            'septs': [[1, 3, 5, 8, 10, 12, 14]]
-        },
-        16: {
-            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12], [13, 14]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
-            'quads': [[1, 2, 3, 4], [13, 14, 15, 16]],
-            'quints': [[5, 6, 7, 8, 9]],
-            'sexts': [[9, 10, 11, 12, 13, 14]],
-            'septs': [[1, 4, 7, 10, 13, 15, 16]]
-        }
-    }
-    
-    if N not in configs:
-        raise ValueError(f"N must be one of {list(configs.keys())}, got {N}")
-    
-    config = configs[N]
-    return (
-        np.array(config['edges']),
-        np.array(config['triangles']),
-        np.array(config['quads']),
-        np.array(config['quints']),
-        np.array(config['sexts']),
-        np.array(config['septs'])
-    )
 
-EdgeList, TriangleList_full, QuadList_full, QuintList_full, SextList_full, SeptList_full = get_hyperedge_config(N)
+# Use ecological dynamics from lib_ecological_dynamics to generate data and ground-truth hyperedges
+edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
+
+EdgeList = np.array(edge_config.get('edges', [])) if edge_config.get('edges') else np.empty((0, 2), dtype=int)
+TriangleList_full = np.array(edge_config.get('triangles', [])) if edge_config.get('triangles') else np.empty((0, 3), dtype=int)
+QuadList_full = np.array(edge_config.get('quads', [])) if edge_config.get('quads') else np.empty((0, 4), dtype=int)
+QuintList_full = np.array(edge_config.get('quints', [])) if edge_config.get('quints') else np.empty((0, 5), dtype=int)
+SextList_full = np.array(edge_config.get('sexts', [])) if edge_config.get('sexts') else np.empty((0, 6), dtype=int)
+SeptList_full = np.array(edge_config.get('septs', [])) if edge_config.get('septs') else np.empty((0, 7), dtype=int)
 
 # Automatically adjust ground truth based on max_order
-TriangleList = TriangleList_full if max_order >= 3 else np.array([]).reshape(0, 3)
-QuadList = QuadList_full if max_order >= 4 else np.array([]).reshape(0, 4)
-QuintList = QuintList_full if max_order >= 5 else np.array([]).reshape(0, 5)
-SextList = SextList_full if max_order >= 6 else np.array([]).reshape(0, 6)
-SeptList = SeptList_full if max_order >= 7 else np.array([]).reshape(0, 7)
+TriangleList = TriangleList_full if max_order >= 3 else np.empty((0, 3), dtype=int)
+QuadList = QuadList_full if max_order >= 4 else np.empty((0, 4), dtype=int)
+QuintList = QuintList_full if max_order >= 5 else np.empty((0, 5), dtype=int)
+SextList = SextList_full if max_order >= 6 else np.empty((0, 6), dtype=int)
+SeptList = SeptList_full if max_order >= 7 else np.empty((0, 7), dtype=int)
 
 all_2edges = list(combinations(range(1, N+1), 2))
-all_3edges = list(combinations(range(1, N+1), 3))
-all_4edges = list(combinations(range(1, N+1), 4))
-all_5edges = list(combinations(range(1, N+1), 5))
-all_6edges = list(combinations(range(1, N+1), 6))
-all_7edges = list(combinations(range(1, N+1), 7))
+all_3edges = list(combinations(range(1, N+1), 3)) if max_order >= 3 else []
+all_4edges = list(combinations(range(1, N+1), 4)) if max_order >= 4 else []
+all_5edges = list(combinations(range(1, N+1), 5)) if max_order >= 5 else []
+all_6edges = list(combinations(range(1, N+1), 6)) if max_order >= 6 else []
+all_7edges = list(combinations(range(1, N+1), 7)) if max_order >= 7 else []
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
@@ -200,38 +66,13 @@ true_5edges = set(tuple(sorted(quint)) for quint in QuintList)
 true_6edges = set(tuple(sorted(sext)) for sext in SextList)
 true_7edges = set(tuple(sorted(sept)) for sept in SeptList)
 
-M = args.M
-tmax = args.tmax
-dt = tmax / M
-t_eval = np.linspace(0, tmax, M+1)
-t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1)
-
-np.random.seed(42)
-x0 = np.random.uniform(-1, 1, size=(3 * N,))
-sol = solve_ivp(
-    roessler_hoi,
-    (0, tmax),
-    x0,
-    t_eval=t_eval,
-    args=(EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList),
-)
-X = sol.y.T
-nt = len(t_eval)
-dxdt = np.array(
-    [
-        roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList)
-        for i, t in enumerate(sol.t)
-    ]
-)
-
-if noise > 0:
-    np.random.seed()
-    X_noisy = X + np.random.randn(*X.shape) * noise
-    print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
-else:
-    X_noisy = X
-
-x_data = torch.tensor(X_noisy, dtype=torch.float64)
+# Time series from ecological simulator (single state dimension per node)
+t_eval, X = HypergraphModel.generate_training_data(N, edge_config, n_samples=M, noise=noise)
+# X has shape (T, N, 1)
+state_dim = X.shape[2]
+X_noisy = X  # noise handled inside generate_training_data
+t_data = torch.tensor(t_eval, dtype=torch.float32, requires_grad=True).unsqueeze(1)
+x_data = torch.tensor(X_noisy.reshape(X_noisy.shape[0], -1), dtype=torch.float32)
 architectures = [
     ("ResNet", True, False, False),
     ("Attention", False, True, False),
@@ -241,16 +82,16 @@ architectures = [
 n_cols = 4
 n_rows = int(np.ceil(N / n_cols))
 plt.figure(figsize=(4*n_cols, 3*n_rows))
-X_plot = x_data.cpu().numpy() if noise > 0 else X
+X_plot = x_data.cpu().numpy()
+coord_names = ['x']
+
 for i in range(N):
     plt.subplot(n_rows, n_cols, i+1)
-    plt.plot(t_eval, X_plot[:, i], 'b-', label=f'x_{i+1}', alpha=0.7)
-    plt.plot(t_eval, X_plot[:, i+N], 'r-', label=f'y_{i+1}', alpha=0.7)
-    plt.plot(t_eval, X_plot[:, i+2*N], 'g-', label=f'z_{i+1}', alpha=0.7)
-    if noise > 0:
-        plt.plot(t_eval, X[:, i], 'b--', alpha=0.3, linewidth=0.5)
-        plt.plot(t_eval, X[:, i+N], 'r--', alpha=0.3, linewidth=0.5)
-        plt.plot(t_eval, X[:, i+2*N], 'g--', alpha=0.3, linewidth=0.5)
+    for coord_idx in range(state_dim):
+        idx = i + coord_idx * N
+        color = 'b'
+        label = f'{coord_names[coord_idx]}_{i+1}' if coord_idx < len(coord_names) else f'state{coord_idx+1}_{i+1}'
+        plt.plot(t_eval, X_plot[:, idx], color + '-', label=label, alpha=0.7)
     plt.xlabel('Time')
     plt.ylabel('State')
     plt.title(f'Node {i+1}')
@@ -258,13 +99,15 @@ for i in range(N):
     plt.grid(True)
 plt.tight_layout()
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
 results_dir = os.path.join(
-    'results_hyperpinn',
+    results_base,
+    "ecological",
     f"sample_{M}_noise_{noise}",
     timestamp,
 )
 os.makedirs(results_dir, exist_ok=True)
-plt.savefig(os.path.join(results_dir, "rossler_oscillators.png"))
+plt.savefig(os.path.join(results_dir, "ecology_timeseries.png"))
 print(f"Results will be saved to: {results_dir}")
 
 def _save_true_hyperedge_figures(
@@ -341,13 +184,28 @@ else:
 arch_name, use_resnet, use_attention, use_pirate = architectures[2]
 model = HyperPINNTopology(
     N=N,
-    output_dim=3*N,
+    output_dim=state_dim * N,
     use_resnet=use_resnet,
     use_attention=use_attention,
     use_pirate=use_pirate,
     max_order=max_order,
 )
 model = model.to(device)
+
+# Precompute all possible hyperedges (0-based indices) aligned with model's internal ordering
+all_edges_tensors = {}
+if max_order >= 2 and hasattr(model, 'edge_indices_t'):
+    all_edges_tensors['edges'] = model.edge_indices_t.to(device)
+if max_order >= 3 and hasattr(model, 'triangle_indices_t'):
+    all_edges_tensors['triangles'] = model.triangle_indices_t.to(device)
+if max_order >= 4 and hasattr(model, 'quad_indices_t'):
+    all_edges_tensors['quads'] = model.quad_indices_t.to(device)
+if max_order >= 5 and hasattr(model, 'quint_indices_t'):
+    all_edges_tensors['quints'] = model.quint_indices_t.to(device)
+if max_order >= 6 and hasattr(model, 'sext_indices_t'):
+    all_edges_tensors['sexts'] = model.sext_indices_t.to(device)
+if max_order >= 7 and hasattr(model, 'sept_indices_t'):
+    all_edges_tensors['septs'] = model.sept_indices_t.to(device)
 
 model.lambda_l1_edges = 0.03      
 model.lambda_l1_triangles = 0.05   
@@ -449,10 +307,138 @@ def plot_roc(y_true, y_score, label):
     plt.plot(fpr, tpr, label=f'{label} (AUC = {auc_score:.2f})',linewidth=2)
     return fpr, tpr, auc_score
 
+def physics_loss_ecology(model, t_data, N, max_order, device, all_edges_tensors):
+    """Physics loss for ecological dynamics using HypergraphModel.
+
+    We use the NN to produce x_pred(t), compute dx/dt via autograd,
+    and match it to ecological dynamics: f(x) + Phi(x) @ A_hat, where
+    A_hat are the sigmoid-transformed topology parameters.
+    """
+    # Ensure t_data has gradients for time-derivative computation
+    if not t_data.requires_grad:
+        t_data = t_data.clone().detach().requires_grad_(True).to(device)
+
+    x_pred = model.forward(t_data)  # [T, N] for ecology (state_dim=1)
+    T, D = x_pred.shape
+    assert D == N, f"Ecology mode expects output_dim = N, got {D}"
+
+    # Time derivative via autograd (vectorized over time, loop over dims only)
+    dx_dt_pred = torch.zeros_like(x_pred)
+    for i in range(D):
+        grad_i = torch.autograd.grad(
+            x_pred[:, i].sum(),
+            t_data,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+        dx_dt_pred[:, i] = grad_i.squeeze(-1)
+
+    # Topology probabilities per order (global over time)
+    edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = \
+        model.get_sparse_weights(use_concrete=False, hard=False)
+
+    # Baseline ecological dynamics f(x,t) for all time points (no competition)
+    f_all = HypergraphModel.dynamic_f_batch(x_pred, N, t_data).view(T, N)
+
+    # Competition contributions from hyperedges, vectorized over time
+    from lib_ecological_dynamics.hypergraph import HypergraphModel as _HM
+    params = _HM._cached_params
+
+    dx_comp = torch.zeros_like(x_pred)
+
+    # 2-body competition
+    if max_order >= 2 and edge_probs is not None and 'edges' in all_edges_tensors:
+        edge_idx = all_edges_tensors['edges']  # [E2, 2]
+        i_nodes = edge_idx[:, 0]
+        j_nodes = edge_idx[:, 1]
+        x_i = x_pred[:, i_nodes]  # [T, E2]
+        x_j = x_pred[:, j_nodes]  # [T, E2]
+        prod = x_i * x_j          # [T, E2]
+        w = params.w2 * edge_probs.to(device).view(1, -1)  # [1, E2]
+        contrib = -w * prod       # [T, E2]
+        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
+        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
+        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
+
+    # 3-body competition
+    if max_order >= 3 and triangle_probs is not None and 'triangles' in all_edges_tensors:
+        tri_idx = all_edges_tensors['triangles']  # [E3, 3]
+        i_nodes = tri_idx[:, 0]
+        j_nodes = tri_idx[:, 1]
+        k_nodes = tri_idx[:, 2]
+        x_i = x_pred[:, i_nodes]
+        x_j = x_pred[:, j_nodes]
+        x_k = x_pred[:, k_nodes]
+        prod = x_i * x_j * x_k      # [T, E3]
+        w = params.w3 * triangle_probs.to(device).view(1, -1)
+        contrib = -w * prod
+        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
+        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
+        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
+        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
+
+    # 4-body competition
+    if max_order >= 4 and quad_probs is not None and 'quads' in all_edges_tensors:
+        quad_idx = all_edges_tensors['quads']  # [E4, 4]
+        i_nodes = quad_idx[:, 0]
+        j_nodes = quad_idx[:, 1]
+        k_nodes = quad_idx[:, 2]
+        l_nodes = quad_idx[:, 3]
+        x_i = x_pred[:, i_nodes]
+        x_j = x_pred[:, j_nodes]
+        x_k = x_pred[:, k_nodes]
+        x_l = x_pred[:, l_nodes]
+        prod = x_i * x_j * x_k * x_l  # [T, E4]
+        w = params.w4 * quad_probs.to(device).view(1, -1)
+        contrib = -w * prod
+        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
+        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
+        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
+        l_nodes_exp = l_nodes.unsqueeze(0).expand(T, -1)
+        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, l_nodes_exp, contrib)
+
+    # 5-body competition
+    if max_order >= 5 and quint_probs is not None and 'quints' in all_edges_tensors:
+        quint_idx = all_edges_tensors['quints']  # [E5, 5]
+        i_nodes = quint_idx[:, 0]
+        j_nodes = quint_idx[:, 1]
+        k_nodes = quint_idx[:, 2]
+        l_nodes = quint_idx[:, 3]
+        m_nodes = quint_idx[:, 4]
+        x_i = x_pred[:, i_nodes]
+        x_j = x_pred[:, j_nodes]
+        x_k = x_pred[:, k_nodes]
+        x_l = x_pred[:, l_nodes]
+        x_m = x_pred[:, m_nodes]
+        prod = x_i * x_j * x_k * x_l * x_m  # [T, E5]
+        w = params.w5 * quint_probs.to(device).view(1, -1)
+        contrib = -w * prod
+        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
+        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
+        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
+        l_nodes_exp = l_nodes.unsqueeze(0).expand(T, -1)
+        m_nodes_exp = m_nodes.unsqueeze(0).expand(T, -1)
+        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, l_nodes_exp, contrib)
+        dx_comp.scatter_add_(1, m_nodes_exp, contrib)
+
+    dx_dt_expected = f_all + dx_comp  # [T, N]
+    residual = dx_dt_pred - dx_dt_expected
+    return torch.mean(residual**2)
+
 for epoch in range(epochs):
     optimizer.zero_grad()
     x_pred = model.forward(t_data)
-    physics_loss = model.physics_loss(t_data)
+    # Physics loss is defined purely from ecological dynamics using HypergraphModel.
+    physics_loss = physics_loss_ecology(model, t_data, N, max_order, device, all_edges_tensors)
     data_loss = torch.mean((x_pred - x_data)**2)
     sparsity_loss, sparsity_info = model.sparsity_regularization()
     
@@ -501,51 +487,7 @@ for epoch in range(epochs):
             f"  L1 sexts: {sparsity_info['l1_sexts']:.2f},"
             f"  L1 septs: {sparsity_info['l1_septs']:.2f}"
         )
-        with torch.no_grad():
-            X_pred = model.forward(t_data).cpu().numpy()
-
-        X_train = x_data.detach().cpu().numpy()  # training data (possibly noisy)
-
-        fig, axes = plt.subplots(N, 3, figsize=(15, 2.5 * N))
-        coord_names = ['x', 'y', 'z']
-
-        for node_idx in range(N):
-            for coord_idx in range(3):
-                ax = axes[node_idx, coord_idx]
-                ax.plot(
-                    t_eval,
-                    X_train[:, node_idx + coord_idx * N],
-                    'o',
-                    label='Data',
-                    markersize=4,
-                    alpha=0.7,
-                    color='blue',
-                )
-
-                # NN prediction (line) -- analogous to "Resampled (Linear)"
-                ax.plot(
-                    t_eval,
-                    X_pred[:, node_idx + coord_idx * N],
-                    '-',
-                    label='NN prediction',
-                    linewidth=1,
-                    alpha=0.8,
-                    color='red',
-                )
-
-                if node_idx == 0:
-                    ax.set_title(f'{coord_names[coord_idx]}-coordinate', fontsize=12)
-                if coord_idx == 0:
-                    ax.set_ylabel(f'Node {node_idx+1}', fontsize=11)
-                if node_idx == N - 1:
-                    ax.set_xlabel('Time', fontsize=10)
-                ax.grid(True, alpha=0.3)
-                if node_idx == 0 and coord_idx == 0:
-                    ax.legend(fontsize=9)
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(results_dir, f"nn_prediction_epoch{epoch}.png"), dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        # (Optional) If needed, we could add 1D ecological prediction plots here.
         
         y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7 = \
             evaluate_edges_triangles(
@@ -632,4 +574,4 @@ plt.title('ROC Curves for Identified Hypergraphs',fontsize=17)
 plt.legend(fontsize=14, loc="lower right")
 plt.xticks(fontsize=12)
 plt.yticks(fontsize=12)
-plt.savefig(os.path.join(results_dir, 'roc_curves_7_order.png'), bbox_inches='tight')
+plt.savefig(os.path.join(results_dir, f'roc_curves_{max_order}_order.png'), bbox_inches='tight')

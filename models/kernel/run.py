@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--n_epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--n_trajectories", type=int, default=1)
-    parser.add_argument("--results_root", type=str, default="results_kernel")
+    parser.add_argument("--results_root", type=str, default="results/kernel")
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
@@ -47,6 +47,8 @@ def main():
     ]
     if args.max_order is not None:
         cmd.extend(["--max_order", str(args.max_order)])
+    if args.n_nodes is not None:
+        cmd.extend(["--n_nodes", str(args.n_nodes)])
 
     proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     raise SystemExit(proc.returncode)

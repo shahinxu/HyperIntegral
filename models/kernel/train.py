@@ -14,8 +14,8 @@ import numpy as np
 import torch
 from sklearn.metrics import auc, roc_curve
 
-from hyperpinn_unified.scene_registry import get_scene_model
-from hyperpinn_unified.outputs import write_standard_summary
+from hypergraph.scene_registry import get_scene_model
+from hypergraph.outputs import write_standard_summary
 
 HypergraphModel = None
 
@@ -217,17 +217,18 @@ def main():
     parser.add_argument("--n_epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--n_nodes", type=int, default=None)
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--n_trajectories", type=int, default=1)
     parser.add_argument("--max_order", type=int, default=None)
-    parser.add_argument("--results_root", type=str, default="results_kernel")
+    parser.add_argument("--results_root", type=str, default="results/kernel")
     args = parser.parse_args()
 
     global HypergraphModel
     HypergraphModel, scene_spec = get_scene_model(args.scene)
 
     defaults = HypergraphModel.get_default_params()
-    n_nodes = defaults["n_nodes"]
+    n_nodes = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
     max_order_default = defaults["max_order"]
     max_order = args.max_order if args.max_order is not None else max_order_default
     max_order = min(max_order, 5)

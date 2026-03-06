@@ -1,7 +1,8 @@
 import os
 import sys
+from pathlib import Path
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -16,12 +17,12 @@ from datetime import datetime
 import networkx as nx
 import argparse
 
-from lib_social_contagion.hypergraph import HypergraphModel as SCMHypergraphModel
+from lib_neuronal_synchronization.hypergraph import HypergraphModel as NSHypergraphModel
 
-parser = argparse.ArgumentParser(description="Run HyperPINN on social contagion hypergraph dynamics")
+parser = argparse.ArgumentParser(description="Run HyperPINN on neuronal synchronization hypergraph dynamics")
 parser.add_argument("--M", type=int, default=300, help="Number of time samples")
-parser.add_argument("--N", type=int, default=8, help="Number of nodes")
-parser.add_argument("--max_order", type=int, default=3, help="Maximum hyperedge order (2, 3, or 4 for contagion)")
+parser.add_argument("--N", type=int, default=30, help="Number of oscillators (nodes)")
+parser.add_argument("--max_order", type=int, default=3, help="Maximum hyperedge order (2 or 3)")
 parser.add_argument("--gpu_id", type=int, default=0)
 parser.add_argument("--noise", type=float, default=0.0)
 args = parser.parse_args()
@@ -33,9 +34,9 @@ gpu_id = args.gpu_id
 noise = args.noise
 
 # ---------------------------------------------------------------------------
-# Ground-truth hypergraph and data generation
+# Ground-truth hypergraph and data generation (neuronal synchronization)
 # ---------------------------------------------------------------------------
-edge_config = SCMHypergraphModel.get_hyperedge_config(N, max_order)
+edge_config = NSHypergraphModel.get_hyperedge_config(N, max_order)
 
 EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") else np.empty((0, 2), dtype=int)
 TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
@@ -55,8 +56,9 @@ true_5edges = set()
 true_6edges = set()
 true_7edges = set()
 
-t_eval, X = SCMHypergraphModel.generate_training_data(N, edge_config, n_samples=M, noise=noise)
-state_dim = X.shape[2]
+# generate_training_data returns continuous phases theta/phi per node
+t_eval, X = NSHypergraphModel.generate_training_data(N, edge_config, n_samples=M, noise=noise)
+state_dim = X.shape[2]  # typically 2 (theta, phi)
 X_noisy = X
 t_data = torch.tensor(t_eval, dtype=torch.float32, requires_grad=True).unsqueeze(1)
 x_data = torch.tensor(X_noisy.reshape(X_noisy.shape[0], -1), dtype=torch.float32)
@@ -84,13 +86,15 @@ for i in range(N):
 plt.tight_layout()
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
 results_dir = os.path.join(
-    "results_hyperpinn_social",
+    results_base,
+    "neuronal",
     f"sample_{M}_noise_{noise}",
     timestamp,
 )
 os.makedirs(results_dir, exist_ok=True)
-plt.savefig(os.path.join(results_dir, "social_timeseries.png"))
+plt.savefig(os.path.join(results_dir, "neuronal_timeseries.png"))
 print(f"Results will be saved to: {results_dir}")
 
 # ---------------------------------------------------------------------------
@@ -321,184 +325,72 @@ def plot_roc(y_true, y_score, label):
 
 
 # ---------------------------------------------------------------------------
-# Physics loss for social contagion
+# Physics loss for neuronal synchronization
 # ---------------------------------------------------------------------------
 
-def physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors):
-    """Physics loss for social contagion dynamics using SCMHypergraphModel.
+def physics_loss_neuronal(model, t_data, N, max_order, device, all_edges_tensors):
+    """Physics loss for neuronal synchronization using NSHypergraphModel.
 
-    NN produces x_pred(t) (infection probability per node). We compute
-    dx/dt via autograd and match it to
+    NN produces x_pred(t) with 2 components per node (theta, phi),
+    flattened as [T, 2N]. We compute d/dt via autograd and match to
 
-        dx/dt ≈ f(x) + Phi(x) @ A,
+        dX/dt ≈ f(X) + Phi(X) @ A,
 
-    where f(x) = -mu * x and Phi(x) encodes the contributions of all
-    candidate edges/triangles/quads, and A is represented by the
-    model's sparse hyperedge weights (edge/triangle/quad probabilities).
+    where f and Phi come from lib_neuronal_synchronization.hypergraph.
     """
 
     if not t_data.requires_grad:
         t_data = t_data.clone().detach().requires_grad_(True).to(device)
 
-    x_pred = model.forward(t_data)  # [T, N]
-    T, D = x_pred.shape
-    assert D == N, f"Social contagion mode expects output_dim = N, got {D}"
+    x_pred_flat = model.forward(t_data)  # [T, 2N]
+    T, Dflat = x_pred_flat.shape
+    assert Dflat == 2 * N, f"Neuronal mode expects output_dim = 2N, got {Dflat} for N={N}"
 
-    # Time derivative via autograd (per-node, small N so loop is fine)
-    dx_dt_pred = torch.zeros_like(x_pred)
-    for i in range(D):
+    # Reshape to [T, N, 2] for (theta, phi)
+    x_pred = x_pred_flat.view(T, N, 2)
+
+    # Time derivative via autograd (per component over output dimension)
+    dx_dt_flat = torch.zeros_like(x_pred_flat)
+    for i in range(Dflat):
         grad_i = torch.autograd.grad(
-            x_pred[:, i].sum(), t_data, create_graph=True, retain_graph=True
+            x_pred_flat[:, i].sum(), t_data, create_graph=True, retain_graph=True
         )[0]
-        dx_dt_pred[:, i] = grad_i.squeeze(-1)
+        dx_dt_flat[:, i] = grad_i.squeeze(-1)
+    dx_dt = dx_dt_flat.view(T, N, 2)
 
     # Topology probabilities (global, per order)
     edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = model.get_sparse_weights(
         use_concrete=False, hard=False
     )
 
-    # Build concatenated weight vector A_all matching the ordering used
-    # below: first all edges, then all triangles, then all quads.
     weights_list = []
-    n_edges = 0
-    n_tris = 0
-    n_quads = 0
     if max_order >= 2 and edge_probs is not None and "edges" in all_edges_tensors:
-        edge_probs = edge_probs.to(device)
-        n_edges = edge_probs.shape[0]
-        weights_list.append(edge_probs)
+        weights_list.append(edge_probs.to(device))
     if max_order >= 3 and triangle_probs is not None and "triangles" in all_edges_tensors:
-        triangle_probs = triangle_probs.to(device)
-        n_tris = triangle_probs.shape[0]
-        weights_list.append(triangle_probs)
-    if max_order >= 4 and quad_probs is not None and "quads" in all_edges_tensors:
-        quad_probs = quad_probs.to(device)
-        n_quads = quad_probs.shape[0]
-        weights_list.append(quad_probs)
-    # Parameters of the SCM dynamics (mu, beta, beta_delta)
-    params = SCMHypergraphModel.SCMParams()
+        weights_list.append(triangle_probs.to(device))
 
     if len(weights_list) == 0:
-        # No candidate hyperedges; fall back to matching only f(x) = -mu x
-        dx_expected = -params.mu * x_pred
-        residual = dx_dt_pred - dx_expected
+        # Only drift part f(x), fully vectorized over time
+        dx_expected = NSHypergraphModel.dynamic_f_batch(x_pred, N)  # [T, N, 2]
+        residual = dx_dt - dx_expected
         return torch.mean(residual ** 2)
 
     A_all = torch.cat(weights_list)  # [E_total]
 
-    # Prepare all_possible_edges dict (0-based indices)
+    # all_possible_edges using 0-based indices from the model
     all_possible_edges = {}
     if max_order >= 2 and "edges" in all_edges_tensors:
         all_possible_edges["edges"] = all_edges_tensors["edges"]
     if max_order >= 3 and "triangles" in all_edges_tensors:
         all_possible_edges["triangles"] = all_edges_tensors["triangles"]
-    if max_order >= 4 and "quads" in all_edges_tensors:
-        all_possible_edges["quads"] = all_edges_tensors["quads"]
 
-    # Vectorized computation of f(x) and Phi(x)A over all time steps.
-    # x_all: [T, N]
-    x_all = x_pred
-    susceptible = 1.0 - x_all  # [T, N]
+    # Vectorized over all time steps: f(x_t) and Phi(x_t) @ A_all
+    f_all = NSHypergraphModel.dynamic_f_batch(x_pred, N)  # [T, N, 2]
+    Phi_all = NSHypergraphModel.dynamic_phi_batch(x_pred, all_possible_edges, N, device)  # [T, N, 2, E_total]
+    interaction_all = torch.einsum("tnde,e->tnd", Phi_all, A_all)  # [T, N, 2]
+    dx_expected = f_all + interaction_all
 
-    # Drift part: f(x) = -mu * x
-    f_all = -params.mu * x_all  # [T, N]
-
-    # Interaction part: Phi(x) * A, with Phi shape [T, N, E_total]
-    E_total = A_all.shape[0]
-    Phi = torch.zeros((T, N, E_total), device=device, dtype=x_all.dtype)
-    feature_offset = 0
-
-    # 1. Pairwise edges
-    edges = all_possible_edges.get("edges", [])
-    if len(edges) > 0:
-        edges_t = torch.as_tensor(edges, dtype=torch.long, device=device)  # [E2, 2]
-        num_edges = edges_t.shape[0]
-        i_idx = edges_t[:, 0]
-        j_idx = edges_t[:, 1]
-
-        feature_range = feature_offset + torch.arange(num_edges, device=device)  # [E2]
-
-        # term_i, term_j: [T, E2]
-        term_i = params.beta * susceptible[:, i_idx] * x_all[:, j_idx]
-        term_j = params.beta * susceptible[:, j_idx] * x_all[:, i_idx]
-
-        # Advanced indexing to assign terms for all times at once
-        time_idx = torch.arange(T, device=device)[:, None]            # [T, 1]
-        edge_ids = feature_range[None, :]                             # [1, E2]
-        node_i = i_idx[None, :]                                       # [1, E2]
-        node_j = j_idx[None, :]
-
-        Phi[time_idx, node_i, edge_ids] = term_i
-        Phi[time_idx, node_j, edge_ids] = term_j
-
-        feature_offset += num_edges
-
-    # 2. Triangles
-    triangles = all_possible_edges.get("triangles", [])
-    if len(triangles) > 0:
-        tri_t = torch.as_tensor(triangles, dtype=torch.long, device=device)  # [E3, 3]
-        num_tris = tri_t.shape[0]
-        i_idx = tri_t[:, 0]
-        j_idx = tri_t[:, 1]
-        k_idx = tri_t[:, 2]
-
-        feature_range = feature_offset + torch.arange(num_tris, device=device)  # [E3]
-
-        term_i = params.beta_delta * susceptible[:, i_idx] * (x_all[:, j_idx] * x_all[:, k_idx])
-        term_j = params.beta_delta * susceptible[:, j_idx] * (x_all[:, i_idx] * x_all[:, k_idx])
-        term_k = params.beta_delta * susceptible[:, k_idx] * (x_all[:, i_idx] * x_all[:, j_idx])
-
-        time_idx = torch.arange(T, device=device)[:, None]            # [T, 1]
-        edge_ids = feature_range[None, :]                             # [1, E3]
-        node_i = i_idx[None, :]
-        node_j = j_idx[None, :]
-        node_k = k_idx[None, :]
-
-        Phi[time_idx, node_i, edge_ids] = term_i
-        Phi[time_idx, node_j, edge_ids] = term_j
-        Phi[time_idx, node_k, edge_ids] = term_k
-
-        feature_offset += num_tris
-
-    # 3. Quads (4-body interactions)
-    quads = all_possible_edges.get("quads", [])
-    if len(quads) > 0:
-        quads_t = torch.as_tensor(quads, dtype=torch.long, device=device)  # [E4, 4]
-        num_quads = quads_t.shape[0]
-        i_idx = quads_t[:, 0]
-        j_idx = quads_t[:, 1]
-        k_idx = quads_t[:, 2]
-        l_idx = quads_t[:, 3]
-
-        feature_range = feature_offset + torch.arange(num_quads, device=device)  # [E4]
-
-        term_i = params.beta_delta * susceptible[:, i_idx] * (x_all[:, j_idx] * x_all[:, k_idx] * x_all[:, l_idx])
-        term_j = params.beta_delta * susceptible[:, j_idx] * (x_all[:, i_idx] * x_all[:, k_idx] * x_all[:, l_idx])
-        term_k = params.beta_delta * susceptible[:, k_idx] * (x_all[:, i_idx] * x_all[:, j_idx] * x_all[:, l_idx])
-        term_l = params.beta_delta * susceptible[:, l_idx] * (x_all[:, i_idx] * x_all[:, j_idx] * x_all[:, k_idx])
-
-        time_idx = torch.arange(T, device=device)[:, None]            # [T, 1]
-        edge_ids = feature_range[None, :]                             # [1, E4]
-        node_i = i_idx[None, :]
-        node_j = j_idx[None, :]
-        node_k = k_idx[None, :]
-        node_l = l_idx[None, :]
-
-        Phi[time_idx, node_i, edge_ids] = term_i
-        Phi[time_idx, node_j, edge_ids] = term_j
-        Phi[time_idx, node_k, edge_ids] = term_k
-        Phi[time_idx, node_l, edge_ids] = term_l
-
-        feature_offset += num_quads
-
-    # Now contract Phi with A_all: [T, N, E_total] @ [E_total] -> [T, N]
-    Phi_flat = Phi.view(T * N, E_total)
-    interaction_flat = torch.matmul(Phi_flat, A_all)  # [T * N]
-    interaction = interaction_flat.view(T, N)
-
-    dx_expected = f_all + interaction
-
-    residual = dx_dt_pred - dx_expected
+    residual = dx_dt - dx_expected
     return torch.mean(residual ** 2)
 
 
@@ -509,7 +401,7 @@ for epoch in range(epochs):
     optimizer.zero_grad()
     x_pred = model.forward(t_data)
 
-    physics_loss = physics_loss_social(model, t_data, N, max_order, device, all_edges_tensors)
+    physics_loss = physics_loss_neuronal(model, t_data, N, max_order, device, all_edges_tensors)
     data_loss = torch.mean((x_pred - x_data) ** 2)
     sparsity_loss, sparsity_info = model.sparsity_regularization()
 
