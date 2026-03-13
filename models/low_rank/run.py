@@ -21,7 +21,6 @@ def main():
     parser.add_argument("--n_trajectories", type=int, default=1)
     parser.add_argument("--results_root", type=str, default="results/low_rank")
     parser.add_argument("--rank", type=int, default=20)
-    parser.add_argument("--max_candidates_per_order", type=int, default=4096)
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
@@ -47,8 +46,6 @@ def main():
         str(args.n_trajectories),
         "--rank",
         str(args.rank),
-        "--max_candidates_per_order",
-        str(args.max_candidates_per_order),
         "--results_root",
         args.results_root,
     ]

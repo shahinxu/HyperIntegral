@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 from itertools import combinations
-from math import comb
 import os
 from datetime import datetime
 from tqdm import tqdm
@@ -24,7 +23,7 @@ HypergraphModel = None
 
 
 class OrderwiseSparseHypergraphTensors(nn.Module):
-    def __init__(self, n_nodes: int, all_possible_edges: dict):
+    def __init__(self, n_nodes: int, orderwise_support: dict):
         super().__init__()
         self.n_nodes = n_nodes
         self.order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
@@ -46,7 +45,7 @@ class OrderwiseSparseHypergraphTensors(nn.Module):
         }
         self.params = nn.ParameterDict()
         for key in self.order_keys:
-            edges = all_possible_edges.get(key, [])
+            edges = orderwise_support.get(key, [])
             n_edges = len(edges)
             if n_edges == 0:
                 self.register_buffer(f'{key}_indices', torch.empty((self.order_dims[key], 0), dtype=torch.long))
@@ -162,10 +161,9 @@ class TimeResNet(nn.Module):
 
 
 
-def compute_auc_scores(order_scores, edge_config, N, max_order, all_possible=None):
-    # Candidate pool for evaluation: prefer the one used in training.
-    if all_possible is None:
-        all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
+def compute_auc_scores(order_scores, edge_config, N, max_order, orderwise_support=None):
+    if orderwise_support is None:
+        orderwise_support = build_full_orderwise_support(N, max_order)
     
     # Compute AUC for each order
     auc_scores = {}
@@ -180,8 +178,7 @@ def compute_auc_scores(order_scores, edge_config, N, max_order, all_possible=Non
         if order_num > max_order:
             break
         
-        # Get all possible hyperedges and true hyperedges
-        possible_edges = all_possible.get(order_name, [])
+        possible_edges = orderwise_support.get(order_name, [])
         true_edges = edge_config.get(order_name, [])
         
         if len(possible_edges) == 0:
@@ -216,14 +213,7 @@ def compute_auc_scores(order_scores, edge_config, N, max_order, all_possible=Non
     return auc_scores, roc_data
 
 
-def build_training_candidate_pool(
-    n_nodes: int,
-    max_order: int,
-    edge_config: dict,
-    max_candidates_per_order: int = 5000,
-    seed: int = 42,
-) -> dict:
-    rng = np.random.default_rng(seed)
+def build_full_orderwise_support(n_nodes: int, max_order: int) -> dict:
     order_to_key = {
         2: "edges",
         3: "triangles",
@@ -232,30 +222,12 @@ def build_training_candidate_pool(
         6: "sexts",
         7: "septs",
     }
-    pool = {k: [] for k in order_to_key.values()}
-
+    support = {k: [] for k in order_to_key.values()}
     max_order = min(max_order, 7)
     for order in range(2, max_order + 1):
         key = order_to_key[order]
-        true_set = {tuple(sorted(map(int, e))) for e in edge_config.get(key, [])}
-        total = comb(n_nodes, order)
-
-        if total <= max_candidates_per_order:
-            pool[key] = [list(edge) for edge in combinations(range(1, n_nodes + 1), order)]
-            continue
-
-        target = max(max_candidates_per_order, len(true_set))
-        selected = set(true_set)
-        attempts = 0
-        max_attempts = max(1000, target * 50)
-        while len(selected) < target and attempts < max_attempts:
-            cand = tuple(sorted((rng.choice(n_nodes, size=order, replace=False) + 1).tolist()))
-            selected.add(cand)
-            attempts += 1
-
-        pool[key] = [list(edge) for edge in sorted(selected)]
-
-    return pool
+        support[key] = [list(edge) for edge in combinations(range(1, n_nodes + 1), order)]
+    return support
 
 
 def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
@@ -395,20 +367,18 @@ def train_integral_model(
     n_samples=11,
     noise=0.0,
     n_trajectories: int = 1,
-    max_candidates_per_order: int = 5000,
     results_root: str = "results/integral",
     scene_label: str = "unknown",
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
-    all_possible_edges = build_training_candidate_pool(
-        n_nodes=N,
-        max_order=max_order,
-        edge_config=edge_config,
-        max_candidates_per_order=max_candidates_per_order,
-        seed=42,
-    )
+    try:
+        model_module = HypergraphModel.__module__
+    except Exception:
+        model_module = ""
+    tensorized_supported = _supports_tensorized_coupling(model_module)
+    orderwise_support = build_full_orderwise_support(N, max_order)
     order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
     order_sizes = {
         'edges': 2,
@@ -418,15 +388,15 @@ def train_integral_model(
         'sexts': 6,
         'septs': 7,
     }
-    n_hyperedges = sum(len(all_possible_edges.get(key, [])) for key in order_keys)
+    n_hyperedges = sum(len(orderwise_support.get(key, [])) for key in order_keys)
     print(f"N={N}, max_order={max_order}")
-    print(f"Total possible hyperedges={n_hyperedges}")
-    print(f"  2-edges: {len(all_possible_edges.get('edges', []))}")
-    print(f"  3-edges: {len(all_possible_edges.get('triangles', []))}")
-    print(f"  4-edges: {len(all_possible_edges.get('quads', []))}")
-    print(f"  5-edges: {len(all_possible_edges.get('quints', []))}")
-    print(f"  6-edges: {len(all_possible_edges.get('sexts', []))}")
-    print(f"  7-edges: {len(all_possible_edges.get('septs', []))}")
+    print(f"Total hyperedge parameters={n_hyperedges}")
+    print(f"  2-edges: {len(orderwise_support.get('edges', []))}")
+    print(f"  3-edges: {len(orderwise_support.get('triangles', []))}")
+    print(f"  4-edges: {len(orderwise_support.get('quads', []))}")
+    print(f"  5-edges: {len(orderwise_support.get('quints', []))}")
+    print(f"  6-edges: {len(orderwise_support.get('sexts', []))}")
+    print(f"  7-edges: {len(orderwise_support.get('septs', []))}")
     print(f"\nTrue hyperedges:")
     print(f"  2-edges: {len(edge_config.get('edges', []))}")
     print(f"  3-edges: {len(edge_config.get('triangles', []))}")
@@ -434,12 +404,7 @@ def train_integral_model(
     print(f"  5-edges: {len(edge_config.get('quints', []))}")
     print(f"  6-edges: {len(edge_config.get('sexts', []))}")
     print(f"  7-edges: {len(edge_config.get('septs', []))}")
-    
     print("\nGenerating training data...")
-    try:
-        model_module = HypergraphModel.__module__
-    except Exception:
-        model_module = ""
     is_discrete_social = "lib_social_contagion" in model_module
 
     # --- Data generation: single vs multi-trajectory ---
@@ -608,8 +573,6 @@ def train_integral_model(
     else:
         x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [T, N, D]
         x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [T, N, D]
-    tensorized_supported = _supports_tensorized_coupling(model_module)
-
     all_possible_edges_gpu = {}
     Phi_all = None
     print("Pre-computing basic dynamics f for all time points...")
@@ -639,7 +602,7 @@ def train_integral_model(
     if not tensorized_supported:
         print("Converting hyperedge indices to GPU tensors...")
         for key in order_keys:
-            edges = all_possible_edges.get(key, [])
+            edges = orderwise_support.get(key, [])
             if len(edges) > 0:
                 all_possible_edges_gpu[key] = torch.tensor(edges, dtype=torch.long, device=device) - 1
             else:
@@ -667,10 +630,10 @@ def train_integral_model(
     else:
         print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
-    orderwise_params = OrderwiseSparseHypergraphTensors(N, all_possible_edges).to(device)
+    orderwise_params = OrderwiseSparseHypergraphTensors(N, orderwise_support).to(device)
     n_param_tensors = len(orderwise_params.params)
     sparse_tensors = orderwise_params.sparse_tensors(apply_sigmoid=False)
-    print(f"Using {n_param_tensors} order-specific sparse tensors for candidate scores")
+    print(f"Using {n_param_tensors} order-specific sparse tensors")
     for key in order_keys:
         tensor = sparse_tensors[key]
         if tensor._nnz() == 0:
@@ -774,26 +737,26 @@ def train_integral_model(
             print(f"Epoch {epoch+1}/{n_epochs} - AUC Evaluation")
             print('='*60)
             order_scores = orderwise_params.numpy_by_order()
-            auc_scores, _ = compute_auc_scores(order_scores, edge_config, N, max_order, all_possible_edges)
+            auc_scores, _ = compute_auc_scores(order_scores, edge_config, N, max_order, orderwise_support)
             
-            all_possible = all_possible_edges
+            orderwise_edges = orderwise_support
             
             for order_name, order_label in zip(['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs'],
                                                ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']):
                 if order_label not in auc_scores:
                     continue
                     
-                possible_edges = all_possible.get(order_name, [])
+                possible_edges = orderwise_edges.get(order_name, [])
                 true_edges = edge_config.get(order_name, [])
-                n_possible = len(possible_edges)
+                n_support = len(possible_edges)
                 n_true = len(true_edges)
                 score_order = order_scores.get(order_name, np.empty(0, dtype=np.float32))
                 
                 auc_score = auc_scores[order_label]
                 if auc_score is not None:
-                    print(f"  {order_label}: AUC = {auc_score:.4f} | Possible={n_possible}, True={n_true} | score range=[{score_order.min():.3f}, {score_order.max():.3f}]")
+                    print(f"  {order_label}: AUC = {auc_score:.4f} | Support={n_support}, True={n_true} | score range=[{score_order.min():.3f}, {score_order.max():.3f}]")
                 else:
-                    print(f"  {order_label}: N/A | Possible={n_possible}, True={n_true}")
+                    print(f"  {order_label}: N/A | Support={n_support}, True={n_true}")
             print('='*60 + '\n')
     
     return orderwise_params.numpy_by_order(), edge_config, save_dir
@@ -813,7 +776,6 @@ if __name__ == "__main__":
     parser.add_argument('--n_trajectories', type=int, default=1)
     parser.add_argument('--max_order', type=int, default=None)
     parser.add_argument('--rank', type=int, default=None)
-    parser.add_argument('--max_candidates_per_order', type=int, default=4096)
     args = parser.parse_args()
     
     HypergraphModel, scene_spec = get_scene_model(args.scene)
@@ -836,7 +798,6 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         noise=args.noise,
         n_trajectories=args.n_trajectories,
-        max_candidates_per_order=args.max_candidates_per_order,
         results_root=args.results_root,
         scene_label=scene_spec.label,
     )
@@ -847,13 +808,7 @@ if __name__ == "__main__":
         edge_config,
         N,
         max_order,
-        build_training_candidate_pool(
-            n_nodes=N,
-            max_order=max_order,
-            edge_config=edge_config,
-            max_candidates_per_order=args.max_candidates_per_order,
-            seed=42,
-        ),
+        build_full_orderwise_support(N, max_order),
     )
     
     print("\nAUC scores for each order:")
@@ -888,7 +843,6 @@ if __name__ == "__main__":
             "lr": args.lr,
             "noise": args.noise,
             "n_trajectories": args.n_trajectories,
-            "max_candidates_per_order": args.max_candidates_per_order,
         },
         auc_scores=auc_scores,
     )
