@@ -3,6 +3,8 @@ from torch import optim, nn
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
+from itertools import combinations
+from math import comb
 import os
 from datetime import datetime
 from tqdm import tqdm
@@ -63,9 +65,10 @@ class TimeResNet(nn.Module):
 
 
 
-def compute_auc_scores(A_learned, edge_config, N, max_order):
-    # Generate all possible hyperedges
-    all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
+def compute_auc_scores(A_learned, edge_config, N, max_order, all_possible=None):
+    # Candidate pool for evaluation: prefer the one used in training.
+    if all_possible is None:
+        all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
     
     # Flatten A
     A_flat = A_learned.flatten()
@@ -129,9 +132,50 @@ def compute_auc_scores(A_learned, edge_config, N, max_order):
     return auc_scores, roc_data
 
 
+def build_training_candidate_pool(
+    n_nodes: int,
+    max_order: int,
+    edge_config: dict,
+    max_candidates_per_order: int = 5000,
+    seed: int = 42,
+) -> dict:
+    rng = np.random.default_rng(seed)
+    order_to_key = {
+        2: "edges",
+        3: "triangles",
+        4: "quads",
+        5: "quints",
+        6: "sexts",
+        7: "septs",
+    }
+    pool = {k: [] for k in order_to_key.values()}
+
+    max_order = min(max_order, 7)
+    for order in range(2, max_order + 1):
+        key = order_to_key[order]
+        true_set = {tuple(sorted(map(int, e))) for e in edge_config.get(key, [])}
+        total = comb(n_nodes, order)
+
+        if total <= max_candidates_per_order:
+            pool[key] = [list(edge) for edge in combinations(range(1, n_nodes + 1), order)]
+            continue
+
+        target = max(max_candidates_per_order, len(true_set))
+        selected = set(true_set)
+        attempts = 0
+        max_attempts = max(1000, target * 50)
+        while len(selected) < target and attempts < max_attempts:
+            cand = tuple(sorted((rng.choice(n_nodes, size=order, replace=False) + 1).tolist()))
+            selected.add(cand)
+            attempts += 1
+
+        pool[key] = [list(edge) for edge in sorted(selected)]
+
+    return pool
+
+
 def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
     plt.figure(figsize=(8, 6))
-    # Define colors
     colors = {
         '2-edges': 'blue',
         '3-edges': 'green',
@@ -176,13 +220,20 @@ def train_integral_model(
     n_samples=11,
     noise=0.0,
     n_trajectories: int = 1,
+    max_candidates_per_order: int = 5000,
     results_root: str = "results/integral",
     scene_label: str = "unknown",
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
-    all_possible_edges = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
+    all_possible_edges = build_training_candidate_pool(
+        n_nodes=N,
+        max_order=max_order,
+        edge_config=edge_config,
+        max_candidates_per_order=max_candidates_per_order,
+        seed=42,
+    )
     order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
     order_sizes = {
         'edges': 2,
@@ -524,9 +575,9 @@ def train_integral_model(
             print(f"Epoch {epoch+1}/{n_epochs} - AUC Evaluation")
             print('='*60)
             A_current = A.detach().cpu().numpy()
-            auc_scores, _ = compute_auc_scores(A_current, edge_config, N, max_order)
+            auc_scores, _ = compute_auc_scores(A_current, edge_config, N, max_order, all_possible_edges)
             
-            all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
+            all_possible = all_possible_edges
             A_flat = A_current.flatten()
             A_idx = 0
             
@@ -564,10 +615,9 @@ if __name__ == "__main__":
     parser.add_argument('--n_nodes', type=int, default=None)
     parser.add_argument('--noise', type=float, default=0.0)
     parser.add_argument('--results_root', type=str, default='results/integral')
-    parser.add_argument('--n_trajectories', type=int, default=1,
-                        help='Number of independent trajectories on the same hypergraph (social contagion model only)')
-    parser.add_argument('--max_order', type=int, default=None,
-                        help='Maximum hyperedge order to use in Integral PINN (default: model library default)')
+    parser.add_argument('--n_trajectories', type=int, default=1)
+    parser.add_argument('--max_order', type=int, default=None)
+    parser.add_argument('--max_candidates_per_order', type=int, default=50000)
     args = parser.parse_args()
     
     HypergraphModel, scene_spec = get_scene_model(args.scene)
@@ -590,12 +640,25 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         noise=args.noise,
         n_trajectories=args.n_trajectories,
+        max_candidates_per_order=args.max_candidates_per_order,
         results_root=args.results_root,
         scene_label=scene_spec.label,
     )
     
     print("\nComputing AUC scores...")
-    auc_scores, roc_data = compute_auc_scores(A_learned, edge_config, N, max_order)
+    auc_scores, roc_data = compute_auc_scores(
+        A_learned,
+        edge_config,
+        N,
+        max_order,
+        build_training_candidate_pool(
+            n_nodes=N,
+            max_order=max_order,
+            edge_config=edge_config,
+            max_candidates_per_order=args.max_candidates_per_order,
+            seed=42,
+        ),
+    )
     
     print("\nAUC scores for each order:")
     for order_label, auc_score in auc_scores.items():
@@ -629,6 +692,7 @@ if __name__ == "__main__":
             "lr": args.lr,
             "noise": args.noise,
             "n_trajectories": args.n_trajectories,
+            "max_candidates_per_order": args.max_candidates_per_order,
         },
         auc_scores=auc_scores,
     )
