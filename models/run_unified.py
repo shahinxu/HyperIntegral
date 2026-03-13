@@ -6,7 +6,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="Unified entrypoint for HyperPINN methods")
-    parser.add_argument("--method", required=True, choices=["integral", "kernel", "baseline", "this"])
+    parser.add_argument("--method", required=True, choices=["integral", "kernel", "baseline", "this", "implicit"])
     parser.add_argument("--scene", required=True, choices=["ecological", "neuronal", "rossler", "social"])
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--max_order", type=int, default=None)
@@ -23,10 +23,18 @@ def main():
 
     project_root = Path(__file__).resolve().parents[1]
 
+    method_to_module = {
+        "integral": "integral",
+        "kernel": "kernel",
+        "baseline": "hyperpinn",
+        "this": "this",
+        "implicit": "Implicit",
+    }
+
     cmd = [
         sys.executable,
         "-m",
-        f"models.{args.method}.run",
+        f"models.{method_to_module[args.method]}.run",
         "--scene",
         args.scene,
         "--n_samples",

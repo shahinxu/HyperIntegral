@@ -21,8 +21,15 @@ class HypergraphModel:
         seed: int = 123
 
     @staticmethod
-    def _preset_hypergraph_file() -> Path:
-        return Path(__file__).resolve().parent / "presets" / "social_contagion_n60_hypergraph.json"
+    def _preset_hypergraph_file(preset: str = "n8") -> Path:
+        preset_name = (preset or "n8").strip().lower()
+        preset_map = {
+            "n60": "social_contagion_n60_hypergraph.json",
+            "n8": "social_contagion_n8_hypergraph.json",
+        }
+        if preset_name not in preset_map:
+            raise ValueError(f"Unsupported social contagion hypergraph preset: {preset}")
+        return Path(__file__).resolve().parent / "presets" / preset_map[preset_name]
 
     @staticmethod
     def _load_hypergraph_payload(file_path: Path) -> dict:
@@ -50,17 +57,28 @@ class HypergraphModel:
         return 0
 
     @staticmethod
-    def _resolve_hypergraph_file(hypergraph_file: str | None = None) -> Path:
+    def _resolve_hypergraph_file(
+        hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
+    ) -> Path:
         env_path = os.getenv("SOCIAL_CONTAGION_HYPERGRAPH_FILE", "").strip()
         if env_path:
             return Path(env_path)
+        env_preset = os.getenv("SOCIAL_CONTAGION_HYPERGRAPH_PRESET", "").strip()
+        if env_preset:
+            return HypergraphModel._preset_hypergraph_file(env_preset)
         if hypergraph_file:
             return Path(hypergraph_file)
+        if hypergraph_preset:
+            return HypergraphModel._preset_hypergraph_file(hypergraph_preset)
         return HypergraphModel._preset_hypergraph_file()
 
     @staticmethod
-    def _load_hypergraph_config(hypergraph_file: str | None = None) -> dict:
-        file_path = HypergraphModel._resolve_hypergraph_file(hypergraph_file)
+    def _load_hypergraph_config(
+        hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
+    ) -> dict:
+        file_path = HypergraphModel._resolve_hypergraph_file(hypergraph_file, hypergraph_preset)
         payload = HypergraphModel._load_hypergraph_payload(file_path)
         index_base = int(payload.get("index_base", 1))
 
@@ -95,7 +113,9 @@ class HypergraphModel:
         n_samples: int = 100,
         noise: float = 0.0,
         seed: int | None = None,
+        hypergraph_preset: str | None = None,
     ):
+        _ = hypergraph_preset
         # Allow overriding the SCM seed so that multiple independent
         # trajectories can be generated on the same underlying
         # hypergraph by varying the random seed.
@@ -382,9 +402,10 @@ class HypergraphModel:
         seed: int = 42,
         enforce_closure: bool = True,
         hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
     ) -> dict:
         _ = (n_nodes, max_order, k_mean, k_delta, seed, enforce_closure)
-        config = HypergraphModel._load_hypergraph_config(hypergraph_file)
+        config = HypergraphModel._load_hypergraph_config(hypergraph_file, hypergraph_preset)
 
         return {
             "edges": config["edges"],
@@ -399,8 +420,8 @@ class HypergraphModel:
 
 
     @staticmethod
-    def get_default_params() -> dict:
-        config = HypergraphModel._load_hypergraph_config()
+    def get_default_params(hypergraph_preset: str | None = None) -> dict:
+        config = HypergraphModel._load_hypergraph_config(hypergraph_preset=hypergraph_preset or "n8")
         return {
             "n_nodes": config["n_nodes"],
             "max_order": config["max_order"],

@@ -2,7 +2,7 @@
 
 set -e
 
-SCENE=${1:-ecological}
+SCENE=${1:-social}
 N_SAMPLES=${2:-300}
 NOISE=${3:-0.0}
 GPU_ID=${4:-0}

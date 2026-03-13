@@ -45,10 +45,18 @@ class HypergraphModel:
         w5: float = 0.40
 
         designed_hypergraph_file: str | None = None
+        designed_hypergraph_preset: str | None = None
 
     @staticmethod
-    def _preset_hypergraph_file() -> Path:
-        return Path(__file__).resolve().parent / "presets" / "ecological_dynamics_n60_hypergraph.json"
+    def _preset_hypergraph_file(preset: str = "n60") -> Path:
+        preset_name = (preset or "n60").strip().lower()
+        preset_map = {
+            "n60": "ecological_dynamics_n60_hypergraph.json",
+            "n9": "ecological_dynamics_n9_hypergraph.json",
+        }
+        if preset_name not in preset_map:
+            raise ValueError(f"Unsupported ecological hypergraph preset: {preset}")
+        return Path(__file__).resolve().parent / "presets" / preset_map[preset_name]
 
     @staticmethod
     def _load_hypergraph_payload(file_path: Path) -> dict:
@@ -83,8 +91,15 @@ class HypergraphModel:
         if env_path:
             return Path(env_path)
 
+        env_preset = os.getenv("ECOLOGY_HYPERGRAPH_PRESET", "").strip()
+        if env_preset:
+            return HypergraphModel._preset_hypergraph_file(env_preset)
+
         if params.designed_hypergraph_file:
             return Path(params.designed_hypergraph_file)
+
+        if params.designed_hypergraph_preset:
+            return HypergraphModel._preset_hypergraph_file(params.designed_hypergraph_preset)
 
         return HypergraphModel._preset_hypergraph_file()
 
@@ -138,8 +153,14 @@ class HypergraphModel:
         seed: int = 42,
         n_steps: int = 4200,
         hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
     ) -> "HypergraphModel.EcologicalHypergraphParams":
-        params = HypergraphModel.EcologicalHypergraphParams(seed=seed, n_steps=n_steps, designed_hypergraph_file=hypergraph_file)
+        params = HypergraphModel.EcologicalHypergraphParams(
+            seed=seed,
+            n_steps=n_steps,
+            designed_hypergraph_file=hypergraph_file,
+            designed_hypergraph_preset=hypergraph_preset,
+        )
         file_path = HypergraphModel._resolve_designed_hypergraph_file(params)
         designed = HypergraphModel._load_designed_hyperedges(file_path)
         n_species = designed["n_nodes"]
@@ -154,6 +175,7 @@ class HypergraphModel:
             seed=seed,
             n_steps=n_steps,
             designed_hypergraph_file=hypergraph_file,
+            designed_hypergraph_preset=hypergraph_preset,
         )
 
     @staticmethod
@@ -514,9 +536,19 @@ class HypergraphModel:
         return Phi
 
     @staticmethod
-    def get_hyperedge_config(n_nodes: int, max_order: int = 5, seed: int = 42, hypergraph_file: str | None = None) -> dict:
+    def get_hyperedge_config(
+        n_nodes: int,
+        max_order: int = 5,
+        seed: int = 42,
+        hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
+    ) -> dict:
         _ = (n_nodes, max_order)
-        params = HypergraphModel._params_from_hypergraph_file(seed=seed, hypergraph_file=hypergraph_file)
+        params = HypergraphModel._params_from_hypergraph_file(
+            seed=seed,
+            hypergraph_file=hypergraph_file,
+            hypergraph_preset=hypergraph_preset,
+        )
 
         result = HypergraphModel._simulate(params)
         HypergraphModel._cached_params = params
@@ -551,10 +583,15 @@ class HypergraphModel:
         n_samples: int = 11,
         noise: float = 0.0,
         hypergraph_file: str | None = None,
+        hypergraph_preset: str | None = None,
     ):
         inferred_n_nodes = HypergraphModel._edge_config_n_nodes(edge_config)
-        if hypergraph_file is not None:
-            params = HypergraphModel._params_from_hypergraph_file(n_steps=max(10, n_samples), hypergraph_file=hypergraph_file)
+        if hypergraph_file is not None or hypergraph_preset is not None:
+            params = HypergraphModel._params_from_hypergraph_file(
+                n_steps=max(10, n_samples),
+                hypergraph_file=hypergraph_file,
+                hypergraph_preset=hypergraph_preset,
+            )
         else:
             n_species = inferred_n_nodes or n_nodes
             n_producers = max(1, n_species // 3)
@@ -567,6 +604,7 @@ class HypergraphModel:
                 n_secondary_consumers=n_secondary,
                 n_steps=max(10, n_samples),
                 designed_hypergraph_file=hypergraph_file,
+                designed_hypergraph_preset=hypergraph_preset,
             )
 
         result = HypergraphModel._simulate(params)
@@ -584,8 +622,10 @@ class HypergraphModel:
         return t, x_data
 
     @staticmethod
-    def get_default_params() -> dict:
-        designed = HypergraphModel._load_designed_hyperedges(HypergraphModel._preset_hypergraph_file())
+    def get_default_params(hypergraph_preset: str | None = None) -> dict:
+        designed = HypergraphModel._load_designed_hyperedges(
+            HypergraphModel._preset_hypergraph_file(hypergraph_preset or "n60")
+        )
         return {
             "n_nodes": designed["n_nodes"],
             "max_order": designed["max_order"],

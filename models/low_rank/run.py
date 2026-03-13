@@ -9,7 +9,7 @@ FILE_DRIVEN_SCENES = {"ecological", "neuronal", "social"}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Unified integral model runner")
+    parser = argparse.ArgumentParser(description="Unified low-rank model runner")
     parser.add_argument("--scene", required=True, choices=["ecological", "neuronal", "rossler", "social"])
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--max_order", type=int, default=None)
@@ -19,15 +19,18 @@ def main():
     parser.add_argument("--n_epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--n_trajectories", type=int, default=1)
-    parser.add_argument("--results_root", type=str, default="results/integral")
+    parser.add_argument("--results_root", type=str, default="results/low_rank")
+    parser.add_argument("--rank", type=int, default=20)
+    parser.add_argument("--max_candidates_per_order", type=int, default=4096)
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
 
+    # Keep a common interface across all methods; unsupported knobs are ignored.
     cmd = [
         sys.executable,
         "-m",
-        "models.integral.train",
+        "models.low_rank.train",
         "--scene",
         args.scene,
         "--n_samples",
@@ -42,6 +45,10 @@ def main():
         str(args.noise),
         "--n_trajectories",
         str(args.n_trajectories),
+        "--rank",
+        str(args.rank),
+        "--max_candidates_per_order",
+        str(args.max_candidates_per_order),
         "--results_root",
         args.results_root,
     ]
