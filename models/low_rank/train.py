@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 from itertools import combinations
+from math import comb
 import os
 from datetime import datetime
 from tqdm import tqdm
@@ -22,10 +23,12 @@ from hypergraph.outputs import write_standard_summary
 HypergraphModel = None
 
 
-class OrderwiseSparseHypergraphTensors(nn.Module):
-    def __init__(self, n_nodes: int, orderwise_support: dict):
+class OrderwiseLowRankHypergraph(nn.Module):
+    def __init__(self, n_nodes: int, max_order: int, rank: int):
         super().__init__()
         self.n_nodes = n_nodes
+        self.max_order = max_order
+        self.rank = rank
         self.order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
         self.order_dims = {
             'edges': 2,
@@ -43,80 +46,105 @@ class OrderwiseSparseHypergraphTensors(nn.Module):
             'sexts': -4.0,
             'septs': -4.0,
         }
-        self.params = nn.ParameterDict()
+        self.node_logits = nn.ParameterDict()
+        self.rank_logits = nn.ParameterDict()
         for key in self.order_keys:
-            edges = orderwise_support.get(key, [])
-            n_edges = len(edges)
-            if n_edges == 0:
-                self.register_buffer(f'{key}_indices', torch.empty((self.order_dims[key], 0), dtype=torch.long))
+            if self.order_dims[key] > self.max_order:
                 continue
-            index_tensor = torch.tensor(edges, dtype=torch.long).t().contiguous() - 1
-            self.register_buffer(f'{key}_indices', index_tensor)
-            values = torch.randn(n_edges, 1) + self.order_to_offset[key]
-            self.params[key] = nn.Parameter(values)
+            self.node_logits[key] = nn.Parameter(0.05 * torch.randn(n_nodes, rank))
+            self.rank_logits[key] = nn.Parameter(0.1 * torch.randn(rank) + self.order_to_offset[key])
 
-    def flat_scores(self) -> torch.Tensor:
+    def node_memberships(self, order_key: str) -> torch.Tensor | None:
+        logits = self.node_logits.get(order_key)
+        if logits is None:
+            return None
+        return torch.sigmoid(logits)
+
+    def rank_weights(self, order_key: str) -> torch.Tensor | None:
+        logits = self.rank_logits.get(order_key)
+        if logits is None:
+            return None
+        return torch.sigmoid(logits)
+
+    def score_edges(self, order_key: str, edges_zero_based: torch.Tensor) -> torch.Tensor:
+        if edges_zero_based.numel() == 0:
+            device = next(self.parameters()).device
+            return torch.empty(0, device=device)
+        memberships = self.node_memberships(order_key)
+        rank_weights = self.rank_weights(order_key)
+        if memberships is None or rank_weights is None:
+            return torch.empty(0, device=edges_zero_based.device)
+        selected = memberships[edges_zero_based]  # [E, order, rank]
+        rank_products = selected.prod(dim=1)  # [E, rank]
+        return (rank_products * rank_weights.view(1, -1)).sum(dim=1)
+
+    def flat_scores_from_support_tensors(self, support_tensors: dict[str, torch.Tensor]) -> torch.Tensor:
         parts = []
         device = next(self.parameters()).device
         for key in self.order_keys:
-            param = self.params.get(key)
-            if param is None or param.numel() == 0:
+            edges = support_tensors.get(key)
+            if edges is None or edges.numel() == 0:
                 continue
-            parts.append(param)
+            parts.append(self.score_edges(key, edges).view(-1, 1))
         if not parts:
             return torch.empty((0, 1), device=device)
         return torch.cat(parts, dim=0)
 
-    def numpy_by_order(self) -> dict:
+    def numpy_by_order(self, orderwise_support: dict, batch_size: int = 65536) -> dict:
         result = {}
         for key in self.order_keys:
-            param = self.params.get(key)
-            if param is None or param.numel() == 0:
+            edges = orderwise_support.get(key, [])
+            if len(edges) == 0 or self.order_dims[key] > self.max_order:
                 result[key] = np.empty(0, dtype=np.float32)
-            else:
-                result[key] = torch.sigmoid(param.detach()).cpu().numpy().reshape(-1)
+                continue
+            chunks = []
+            for start in range(0, len(edges), batch_size):
+                end = min(start + batch_size, len(edges))
+                edges_batch = torch.tensor(edges[start:end], dtype=torch.long, device=next(self.parameters()).device) - 1
+                scores = self.score_edges(key, edges_batch).detach().cpu().numpy()
+                chunks.append(scores.astype(np.float32, copy=False))
+            result[key] = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.float32)
         return result
 
     def probabilities_by_order(self) -> dict:
         result = {}
         for key in self.order_keys:
-            param = self.params.get(key)
-            if param is None or param.numel() == 0:
+            memberships = self.node_memberships(key)
+            rank_weights = self.rank_weights(key)
+            if memberships is None or rank_weights is None:
                 result[key] = None
             else:
-                result[key] = torch.sigmoid(param.view(-1))
+                result[key] = (memberships, rank_weights)
         return result
 
-    def sparse_tensors(self, apply_sigmoid: bool = False) -> dict:
-        tensors = {}
+    def factor_stats(self) -> dict:
+        stats = {}
         for key in self.order_keys:
-            indices = getattr(self, f'{key}_indices')
-            order = self.order_dims[key]
-            shape = (self.n_nodes,) * order
-            param = self.params.get(key)
-            if param is None or param.numel() == 0:
-                tensors[key] = torch.sparse_coo_tensor(
-                    indices,
-                    torch.empty(0, device=indices.device),
-                    size=shape,
-                    device=indices.device,
-                ).coalesce()
+            memberships = self.node_memberships(key)
+            rank_weights = self.rank_weights(key)
+            if memberships is None or rank_weights is None:
                 continue
-            values = param.view(-1)
-            if apply_sigmoid:
-                values = torch.sigmoid(values)
-            tensors[key] = torch.sparse_coo_tensor(
-                indices,
-                values,
-                size=shape,
-                device=values.device,
-            ).coalesce()
-        return tensors
+            stats[key] = {
+                'rank': self.rank,
+                'node_membership_range': (
+                    float(memberships.min().detach().cpu()),
+                    float(memberships.max().detach().cpu()),
+                ),
+                'rank_weight_range': (
+                    float(rank_weights.min().detach().cpu()),
+                    float(rank_weights.max().detach().cpu()),
+                ),
+            }
+        return stats
 
     def clamp_(self, min_value: float, max_value: float):
         with torch.no_grad():
-            for param in self.params.values():
+            for param in self.node_logits.values():
                 param.clamp_(min_value, max_value)
+            for param in self.rank_logits.values():
+                param.clamp_(min_value, max_value)
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.0):
         super().__init__()
@@ -265,97 +293,6 @@ def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
     print(f"ROC curves saved to {os.path.join(save_dir, f'roc_curves_{max_order}_order.png')}")
 
 
-def _supports_tensorized_coupling(model_module: str) -> bool:
-    return (
-        "lib_ecological_dynamics" in model_module
-        or "lib_social_contagion" in model_module
-    )
-
-
-def _tensorized_order_scale(order_key: str, model_module: str):
-    params = HypergraphModel._cached_params
-    if "lib_ecological_dynamics" in model_module:
-        scale_map = {
-            "edges": -params.w2,
-            "triangles": -params.w3,
-            "quads": -params.w4,
-            "quints": -params.w5,
-            "sexts": -params.w5,
-            "septs": -params.w5,
-        }
-        return scale_map[order_key]
-    if "lib_social_contagion" in model_module:
-        scale_map = {
-            "edges": params.beta,
-            "triangles": params.beta_delta,
-            "quads": params.beta_delta,
-            "quints": params.beta_delta,
-            "sexts": params.beta_delta,
-            "septs": params.beta_delta,
-        }
-        return scale_map[order_key]
-    raise NotImplementedError(f"Tensorized coupling not implemented for scene module: {model_module}")
-
-
-def compute_tensorized_coupling_all_times(
-    x_data_gpu: torch.Tensor,
-    orderwise_params: OrderwiseSparseHypergraphTensors,
-    model_module: str,
-) -> torch.Tensor:
-    if x_data_gpu.ndim == 4:
-        leading_shape = x_data_gpu.shape[:-2]
-        n_nodes = x_data_gpu.shape[-2]
-        x_flat = x_data_gpu[..., 0].reshape(-1, n_nodes)
-    else:
-        leading_shape = x_data_gpu.shape[:-2]
-        n_nodes = x_data_gpu.shape[-2]
-        x_flat = x_data_gpu[..., 0].reshape(-1, n_nodes)
-
-    batch_size = x_flat.shape[0]
-    device = x_flat.device
-    dtype = x_flat.dtype
-    coupling = torch.zeros_like(x_flat)
-    is_social = "lib_social_contagion" in model_module
-    susceptible = 1.0 - x_flat if is_social else None
-    order_probs = orderwise_params.probabilities_by_order()
-
-    for order_key in orderwise_params.order_keys:
-        edge_probs = order_probs.get(order_key)
-        if edge_probs is None or edge_probs.numel() == 0:
-            continue
-
-        edge_indices = getattr(orderwise_params, f'{order_key}_indices').t()
-        if edge_indices.numel() == 0:
-            continue
-
-        edge_indices = edge_indices.to(device)
-        order = edge_indices.shape[1]
-        scale = torch.as_tensor(_tensorized_order_scale(order_key, model_module), device=device, dtype=dtype)
-        edge_probs = edge_probs.to(device=device, dtype=dtype)
-        selected = x_flat[:, edge_indices]  # [B, E, order]
-
-        if not is_social:
-            edge_contrib = scale * selected.prod(dim=2) * edge_probs.view(1, -1)
-            for local_pos in range(order):
-                node_idx = edge_indices[:, local_pos].unsqueeze(0).expand(batch_size, -1)
-                coupling.scatter_add_(1, node_idx, edge_contrib)
-            continue
-
-        for local_pos in range(order):
-            other_prod = torch.ones((batch_size, edge_indices.shape[0]), device=device, dtype=dtype)
-            for other_pos in range(order):
-                if other_pos == local_pos:
-                    continue
-                other_prod = other_prod * selected[:, :, other_pos]
-            node_idx = edge_indices[:, local_pos]
-            susc = susceptible[:, node_idx]
-            node_contrib = scale * edge_probs.view(1, -1) * susc * other_prod
-            node_idx_expanded = node_idx.unsqueeze(0).expand(batch_size, -1)
-            coupling.scatter_add_(1, node_idx_expanded, node_contrib)
-
-    return coupling.reshape(*leading_shape, n_nodes, 1)
-
-
 def train_integral_model(
     N=8, 
     max_order=7, 
@@ -367,6 +304,7 @@ def train_integral_model(
     n_samples=11,
     noise=0.0,
     n_trajectories: int = 1,
+    rank: int = 20,
     results_root: str = "results/integral",
     scene_label: str = "unknown",
 ):
@@ -377,7 +315,6 @@ def train_integral_model(
         model_module = HypergraphModel.__module__
     except Exception:
         model_module = ""
-    tensorized_supported = _supports_tensorized_coupling(model_module)
     orderwise_support = build_full_orderwise_support(N, max_order)
     order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
     order_sizes = {
@@ -388,15 +325,10 @@ def train_integral_model(
         'sexts': 6,
         'septs': 7,
     }
-    n_hyperedges = sum(len(orderwise_support.get(key, [])) for key in order_keys)
     print(f"N={N}, max_order={max_order}")
-    print(f"Total hyperedge parameters={n_hyperedges}")
-    print(f"  2-edges: {len(orderwise_support.get('edges', []))}")
-    print(f"  3-edges: {len(orderwise_support.get('triangles', []))}")
-    print(f"  4-edges: {len(orderwise_support.get('quads', []))}")
-    print(f"  5-edges: {len(orderwise_support.get('quints', []))}")
-    print(f"  6-edges: {len(orderwise_support.get('sexts', []))}")
-    print(f"  7-edges: {len(orderwise_support.get('septs', []))}")
+    print(f"Low-rank decomposition rank={rank}")
+    for order in range(2, max_order + 1):
+        print(f"  {order}-edges: {comb(N, order)}")
     print(f"\nTrue hyperedges:")
     print(f"  2-edges: {len(edge_config.get('edges', []))}")
     print(f"  3-edges: {len(edge_config.get('triangles', []))}")
@@ -574,7 +506,7 @@ def train_integral_model(
         x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [T, N, D]
         x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [T, N, D]
     all_possible_edges_gpu = {}
-    Phi_all = None
+    n_hyperedges = sum(len(orderwise_support.get(key, [])) for key in order_keys)
     print("Pre-computing basic dynamics f for all time points...")
     if is_discrete_social and n_trajectories > 1:
         f_all = torch.zeros((n_trajectories, n_times, N, state_dim), device=device)
@@ -599,46 +531,40 @@ def train_integral_model(
             else:
                 f_all[t_idx] = HypergraphModel.dynamic_f(x_t, N)
 
-    if not tensorized_supported:
-        print("Converting hyperedge indices to GPU tensors...")
-        for key in order_keys:
-            edges = orderwise_support.get(key, [])
-            if len(edges) > 0:
-                all_possible_edges_gpu[key] = torch.tensor(edges, dtype=torch.long, device=device) - 1
-            else:
-                all_possible_edges_gpu[key] = torch.empty((0, order_sizes[key]), dtype=torch.long, device=device)
-
-        print("Pre-computing coupling tensor Phi for all time points...")
-        if is_discrete_social and n_trajectories > 1:
-            Phi_all = torch.zeros((n_trajectories, n_times, N, state_dim, n_hyperedges), device=device)
-            for k in range(n_trajectories):
-                for t_idx in tqdm(range(n_times), desc=f"Precomputing Phi (traj {k+1}/{n_trajectories})", leave=False):
-                    x_t = x_data_gpu[k, t_idx]
-                    Phi_all[k, t_idx] = HypergraphModel.dynamic_phi(
-                        x_t, all_possible_edges_gpu, N, device
-                    )
+    print("Converting hyperedge indices to GPU tensors...")
+    for key in order_keys:
+        edges = orderwise_support.get(key, [])
+        if len(edges) > 0:
+            all_possible_edges_gpu[key] = torch.tensor(edges, dtype=torch.long, device=device) - 1
         else:
-            Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
-            for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-                x_t = x_data_gpu[t_idx]
-                Phi_all[t_idx] = HypergraphModel.dynamic_phi(
+            all_possible_edges_gpu[key] = torch.empty((0, order_sizes[key]), dtype=torch.long, device=device)
+
+    print("Pre-computing coupling tensor Phi for all time points...")
+    if is_discrete_social and n_trajectories > 1:
+        Phi_all = torch.zeros((n_trajectories, n_times, N, state_dim, n_hyperedges), device=device)
+        for k in range(n_trajectories):
+            for t_idx in tqdm(range(n_times), desc=f"Precomputing Phi (traj {k+1}/{n_trajectories})", leave=False):
+                x_t = x_data_gpu[k, t_idx]
+                Phi_all[k, t_idx] = HypergraphModel.dynamic_phi(
                     x_t, all_possible_edges_gpu, N, device
                 )
-    dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
-    if tensorized_supported:
-        print(f"Tensorized mode active. f_all shape: {f_all.shape}")
     else:
-        print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
+        Phi_all = torch.zeros((n_times, N, state_dim, n_hyperedges), device=device)
+        for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
+            x_t = x_data_gpu[t_idx]
+            Phi_all[t_idx] = HypergraphModel.dynamic_phi(
+                x_t, all_possible_edges_gpu, N, device
+            )
+    dt_all = t_data_gpu[1:] - t_data_gpu[:-1]
+    print(f"Phi_all shape: {Phi_all.shape}, f_all shape: {f_all.shape}")
     
-    orderwise_params = OrderwiseSparseHypergraphTensors(N, orderwise_support).to(device)
-    n_param_tensors = len(orderwise_params.params)
-    sparse_tensors = orderwise_params.sparse_tensors(apply_sigmoid=False)
-    print(f"Using {n_param_tensors} order-specific sparse tensors")
-    for key in order_keys:
-        tensor = sparse_tensors[key]
-        if tensor._nnz() == 0:
-            continue
-        print(f"  {key}: sparse shape={tuple(tensor.shape)}, nnz={tensor._nnz()}")
+    orderwise_params = OrderwiseLowRankHypergraph(N, max_order, rank).to(device)
+    print("Using order-specific low-rank factors")
+    for key, stats in orderwise_params.factor_stats().items():
+        print(
+            f"  {key}: rank={stats['rank']}, membership_range={stats['node_membership_range']}, "
+            f"rank_weight_range={stats['rank_weight_range']}"
+        )
     optimizer = optim.Adam(orderwise_params.parameters(), lr=lr)
 
     # use_discrete_residual is true exactly for the social contagion
@@ -650,16 +576,7 @@ def train_integral_model(
     pbar = tqdm(range(n_epochs), desc="Training Progress", ncols=120)
     for epoch in pbar:
         optimizer.zero_grad()
-        A = None
-        if not tensorized_supported:
-            A = orderwise_params.flat_scores()
-        tensorized_coupling_all = None
-        if tensorized_supported:
-            tensorized_coupling_all = compute_tensorized_coupling_all_times(
-                x_data_gpu=x_data_gpu,
-                orderwise_params=orderwise_params,
-                model_module=model_module,
-            )
+        A = orderwise_params.flat_scores_from_support_tensors(all_possible_edges_gpu)
 
         if use_discrete_residual:
             # Discrete-time Bernoulli likelihood on Euler-step probabilities.
@@ -671,11 +588,8 @@ def train_integral_model(
                 y_next = x_target_gpu[:, 1:]
                 dt_view = dt_all.view(1, -1, 1, 1)
                 f_curr = f_all[:, :-1]              # [K, T-1, N, D]
-                if tensorized_supported:
-                    PhiA_curr = tensorized_coupling_all[:, :-1]
-                else:
-                    Phi_curr = Phi_all[:, :-1]          # [K, T-1, N, D, E]
-                    PhiA_curr = torch.einsum('ktnie,el->ktni', Phi_curr, A)  # [K, T-1, N, D]
+                Phi_curr = Phi_all[:, :-1]          # [K, T-1, N, D, E]
+                PhiA_curr = torch.einsum('ktnie,el->ktni', Phi_curr, A)  # [K, T-1, N, D]
                 incr_pred = dt_view * (f_curr + PhiA_curr)
                 p_next = x_curr + incr_pred
             else:
@@ -684,11 +598,8 @@ def train_integral_model(
                 y_next = x_target_gpu[1:]         # [T-1, N, D]
                 dt_view = dt_all.view(-1, 1, 1)   # [T-1, 1, 1]
                 f_curr = f_all[:-1]               # [T-1, N, D]
-                if tensorized_supported:
-                    PhiA_curr = tensorized_coupling_all[:-1]
-                else:
-                    Phi_curr = Phi_all[:-1]           # [T-1, N, D, E]
-                    PhiA_curr = torch.einsum('tnie,el->tni', Phi_curr, A)  # [T-1, N, D]
+                Phi_curr = Phi_all[:-1]           # [T-1, N, D, E]
+                PhiA_curr = torch.einsum('tnie,el->tni', Phi_curr, A)  # [T-1, N, D]
                 incr_pred = dt_view * (f_curr + PhiA_curr)
                 p_next = x_curr + incr_pred
 
@@ -710,11 +621,8 @@ def train_integral_model(
                 f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, D]
                 dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
                 integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, D]
-                if tensorized_supported:
-                    Phi_A_interval = tensorized_coupling_all[idx_i:idx_j]
-                else:
-                    Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
-                    Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
+                Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
+                Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
                 integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, D]
 
                 residual = lhs - integral_f - integral_phi_A
@@ -736,7 +644,7 @@ def train_integral_model(
             print(f"\n\n{'='*60}")
             print(f"Epoch {epoch+1}/{n_epochs} - AUC Evaluation")
             print('='*60)
-            order_scores = orderwise_params.numpy_by_order()
+            order_scores = orderwise_params.numpy_by_order(orderwise_support)
             auc_scores, _ = compute_auc_scores(order_scores, edge_config, N, max_order, orderwise_support)
             
             orderwise_edges = orderwise_support
@@ -759,7 +667,7 @@ def train_integral_model(
                     print(f"  {order_label}: N/A | Support={n_support}, True={n_true}")
             print('='*60 + '\n')
     
-    return orderwise_params.numpy_by_order(), edge_config, save_dir
+    return orderwise_params, edge_config, save_dir, orderwise_support
 
 
 if __name__ == "__main__":
@@ -787,7 +695,7 @@ if __name__ == "__main__":
         N = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
         max_order = args.max_order if args.max_order is not None else defaults["max_order"]
     
-    order_scores, edge_config, save_dir = train_integral_model(
+    orderwise_model, edge_config, save_dir, orderwise_support = train_integral_model(
         N=N, 
         max_order=max_order, 
         n_epochs=args.n_epochs, 
@@ -798,17 +706,19 @@ if __name__ == "__main__":
         n_samples=args.n_samples,
         noise=args.noise,
         n_trajectories=args.n_trajectories,
+        rank=args.rank if args.rank is not None else 20,
         results_root=args.results_root,
         scene_label=scene_spec.label,
     )
     
     print("\nComputing AUC scores...")
+    order_scores = orderwise_model.numpy_by_order(orderwise_support)
     auc_scores, roc_data = compute_auc_scores(
         order_scores,
         edge_config,
         N,
         max_order,
-        build_full_orderwise_support(N, max_order),
+        orderwise_support,
     )
     
     print("\nAUC scores for each order:")
@@ -833,11 +743,12 @@ if __name__ == "__main__":
 
     write_standard_summary(
         save_dir=save_dir,
-        method="orderwise_sparse_tensors",
+        method="orderwise_low_rank",
         scene=scene_spec.label,
         config={
             "n_nodes": N,
             "max_order": max_order,
+            "rank": args.rank if args.rank is not None else 20,
             "n_samples": args.n_samples,
             "n_epochs": args.n_epochs,
             "lr": args.lr,

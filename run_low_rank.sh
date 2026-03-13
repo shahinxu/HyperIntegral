@@ -12,11 +12,11 @@ RANK=${9:-20}
 RESULTS_ROOT=${10:-results/low_rank}
 
 echo "======================================="
-echo "Running Orderwise Sparse Tensors"
+echo "Running Orderwise Low-Rank"
 if [ "${SCENE}" = "rossler" ]; then
-    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, rank_ignored=${RANK}, results_root=${RESULTS_ROOT}"
+    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, rank=${RANK}, results_root=${RESULTS_ROOT}"
 else
-    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, rank_ignored=${RANK}, results_root=${RESULTS_ROOT}"
+    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, rank=${RANK}, results_root=${RESULTS_ROOT}"
 fi
 echo "======================================="
 
