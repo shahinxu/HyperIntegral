@@ -23,6 +23,18 @@ SCENE_TO_SCRIPT = {
 }
 
 
+def _safe_max_order(n_nodes: int | None, requested_max_order: int | None) -> int | None:
+    if n_nodes is None or requested_max_order is None:
+        return requested_max_order
+
+    # HyperPINN enumerates all k-combinations; large N with high k is intractable.
+    if n_nodes >= 40:
+        return min(requested_max_order, 3)
+    if n_nodes >= 25:
+        return min(requested_max_order, 4)
+    return requested_max_order
+
+
 def parse_auc_file(path: Path):
     auc_scores = {}
     if not path.exists():
@@ -61,13 +73,20 @@ def main():
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
 
+    effective_max_order = _safe_max_order(args.n_nodes, args.max_order)
+    if args.max_order is not None and effective_max_order is not None and effective_max_order < args.max_order:
+        print(
+            f"[hyperpinn] max_order={args.max_order} is unsafe for n_nodes={args.n_nodes}; "
+            f"using max_order={effective_max_order} to avoid OOM."
+        )
+
     script = SCENE_TO_SCRIPT[args.scene]
     script_path = HYPERPINN_ROOT / script
     cmd = [sys.executable, str(script_path), "--M", str(args.n_samples), "--gpu_id", str(args.gpu_id), "--noise", str(args.noise)]
     if args.n_nodes is not None:
         cmd.extend(["--N", str(args.n_nodes)])
-    if args.max_order is not None:
-        cmd.extend(["--max_order", str(args.max_order)])
+    if effective_max_order is not None:
+        cmd.extend(["--max_order", str(effective_max_order)])
 
     # Run from project root so HyperPINN writes results into top-level results_* directories.
     env = os.environ.copy()
@@ -98,7 +117,7 @@ def main():
             "scene": args.scene,
             "n_samples": args.n_samples,
             "n_nodes": args.n_nodes,
-            "max_order": args.max_order,
+            "max_order": effective_max_order,
             "gpu_id": args.gpu_id,
             "noise": args.noise,
         },

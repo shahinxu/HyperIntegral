@@ -398,7 +398,7 @@ def physics_loss_neuronal(model, t_data, N, max_order, device, all_edges_tensors
 # Training loop
 # ---------------------------------------------------------------------------
 for epoch in range(epochs):
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     x_pred = model.forward(t_data)
 
     physics_loss = physics_loss_neuronal(model, t_data, N, max_order, device, all_edges_tensors)

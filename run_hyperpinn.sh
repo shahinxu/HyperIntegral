@@ -7,7 +7,7 @@ N_SAMPLES=${2:-300}
 NOISE=${3:-0.0}
 GPU_ID=${4:-0}
 N_NODES=${5:-60}
-MAX_ORDER=${6:-5}
+MAX_ORDER=${6:-3}
 RESULTS_ROOT=${7:-results/hyperpinn}
 
 echo "======================================="

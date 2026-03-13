@@ -307,6 +307,32 @@ def plot_roc(y_true, y_score, label):
     plt.plot(fpr, tpr, label=f'{label} (AUC = {auc_score:.2f})',linewidth=2)
     return fpr, tpr, auc_score
 
+
+def _accumulate_ecology_order(dx_comp, x_pred, node_idx, probs, order_weight, chunk_size=4096):
+    """Accumulate one hyperedge order contribution in chunks to reduce peak memory."""
+    if node_idx is None or probs is None or node_idx.numel() == 0:
+        return
+
+    t_len = x_pred.shape[0]
+    e_total = node_idx.shape[0]
+    node_arity = node_idx.shape[1]
+    probs = probs.to(x_pred.device)
+
+    for start in range(0, e_total, chunk_size):
+        end = min(start + chunk_size, e_total)
+        idx_chunk = node_idx[start:end]  # [E_chunk, k]
+
+        # [T, E_chunk, k] -> [T, E_chunk]
+        x_chunk = x_pred[:, idx_chunk]
+        prod = torch.prod(x_chunk, dim=2)
+
+        w = (order_weight * probs[start:end]).view(1, -1)
+        contrib = -w * prod
+
+        for pos in range(node_arity):
+            nodes = idx_chunk[:, pos]
+            dx_comp.scatter_add_(1, nodes.unsqueeze(0).expand(t_len, -1), contrib)
+
 def physics_loss_ecology(model, t_data, N, max_order, device, all_edges_tensors):
     """Physics loss for ecological dynamics using HypergraphModel.
 
@@ -340,102 +366,58 @@ def physics_loss_ecology(model, t_data, N, max_order, device, all_edges_tensors)
     # Baseline ecological dynamics f(x,t) for all time points (no competition)
     f_all = HypergraphModel.dynamic_f_batch(x_pred, N, t_data).view(T, N)
 
-    # Competition contributions from hyperedges, vectorized over time
+    # Competition contributions from hyperedges, vectorized over time.
+    # Chunking keeps memory bounded for large candidate sets.
     from lib_ecological_dynamics.hypergraph import HypergraphModel as _HM
     params = _HM._cached_params
 
     dx_comp = torch.zeros_like(x_pred)
 
-    # 2-body competition
-    if max_order >= 2 and edge_probs is not None and 'edges' in all_edges_tensors:
-        edge_idx = all_edges_tensors['edges']  # [E2, 2]
-        i_nodes = edge_idx[:, 0]
-        j_nodes = edge_idx[:, 1]
-        x_i = x_pred[:, i_nodes]  # [T, E2]
-        x_j = x_pred[:, j_nodes]  # [T, E2]
-        prod = x_i * x_j          # [T, E2]
-        w = params.w2 * edge_probs.to(device).view(1, -1)  # [1, E2]
-        contrib = -w * prod       # [T, E2]
-        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
-        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
-        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
+    chunk_size = int(os.environ.get("HYPERPINN_PHYSICS_CHUNK", "4096"))
 
-    # 3-body competition
-    if max_order >= 3 and triangle_probs is not None and 'triangles' in all_edges_tensors:
-        tri_idx = all_edges_tensors['triangles']  # [E3, 3]
-        i_nodes = tri_idx[:, 0]
-        j_nodes = tri_idx[:, 1]
-        k_nodes = tri_idx[:, 2]
-        x_i = x_pred[:, i_nodes]
-        x_j = x_pred[:, j_nodes]
-        x_k = x_pred[:, k_nodes]
-        prod = x_i * x_j * x_k      # [T, E3]
-        w = params.w3 * triangle_probs.to(device).view(1, -1)
-        contrib = -w * prod
-        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
-        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
-        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
-        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
-
-    # 4-body competition
-    if max_order >= 4 and quad_probs is not None and 'quads' in all_edges_tensors:
-        quad_idx = all_edges_tensors['quads']  # [E4, 4]
-        i_nodes = quad_idx[:, 0]
-        j_nodes = quad_idx[:, 1]
-        k_nodes = quad_idx[:, 2]
-        l_nodes = quad_idx[:, 3]
-        x_i = x_pred[:, i_nodes]
-        x_j = x_pred[:, j_nodes]
-        x_k = x_pred[:, k_nodes]
-        x_l = x_pred[:, l_nodes]
-        prod = x_i * x_j * x_k * x_l  # [T, E4]
-        w = params.w4 * quad_probs.to(device).view(1, -1)
-        contrib = -w * prod
-        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
-        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
-        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
-        l_nodes_exp = l_nodes.unsqueeze(0).expand(T, -1)
-        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, l_nodes_exp, contrib)
-
-    # 5-body competition
-    if max_order >= 5 and quint_probs is not None and 'quints' in all_edges_tensors:
-        quint_idx = all_edges_tensors['quints']  # [E5, 5]
-        i_nodes = quint_idx[:, 0]
-        j_nodes = quint_idx[:, 1]
-        k_nodes = quint_idx[:, 2]
-        l_nodes = quint_idx[:, 3]
-        m_nodes = quint_idx[:, 4]
-        x_i = x_pred[:, i_nodes]
-        x_j = x_pred[:, j_nodes]
-        x_k = x_pred[:, k_nodes]
-        x_l = x_pred[:, l_nodes]
-        x_m = x_pred[:, m_nodes]
-        prod = x_i * x_j * x_k * x_l * x_m  # [T, E5]
-        w = params.w5 * quint_probs.to(device).view(1, -1)
-        contrib = -w * prod
-        i_nodes_exp = i_nodes.unsqueeze(0).expand(T, -1)
-        j_nodes_exp = j_nodes.unsqueeze(0).expand(T, -1)
-        k_nodes_exp = k_nodes.unsqueeze(0).expand(T, -1)
-        l_nodes_exp = l_nodes.unsqueeze(0).expand(T, -1)
-        m_nodes_exp = m_nodes.unsqueeze(0).expand(T, -1)
-        dx_comp.scatter_add_(1, i_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, j_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, k_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, l_nodes_exp, contrib)
-        dx_comp.scatter_add_(1, m_nodes_exp, contrib)
+    if max_order >= 2 and 'edges' in all_edges_tensors:
+        _accumulate_ecology_order(
+            dx_comp,
+            x_pred,
+            all_edges_tensors['edges'],
+            edge_probs,
+            params.w2,
+            chunk_size=chunk_size,
+        )
+    if max_order >= 3 and 'triangles' in all_edges_tensors:
+        _accumulate_ecology_order(
+            dx_comp,
+            x_pred,
+            all_edges_tensors['triangles'],
+            triangle_probs,
+            params.w3,
+            chunk_size=chunk_size,
+        )
+    if max_order >= 4 and 'quads' in all_edges_tensors:
+        _accumulate_ecology_order(
+            dx_comp,
+            x_pred,
+            all_edges_tensors['quads'],
+            quad_probs,
+            params.w4,
+            chunk_size=chunk_size,
+        )
+    if max_order >= 5 and 'quints' in all_edges_tensors:
+        _accumulate_ecology_order(
+            dx_comp,
+            x_pred,
+            all_edges_tensors['quints'],
+            quint_probs,
+            params.w5,
+            chunk_size=chunk_size,
+        )
 
     dx_dt_expected = f_all + dx_comp  # [T, N]
     residual = dx_dt_pred - dx_dt_expected
     return torch.mean(residual**2)
 
 for epoch in range(epochs):
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     x_pred = model.forward(t_data)
     # Physics loss is defined purely from ecological dynamics using HypergraphModel.
     physics_loss = physics_loss_ecology(model, t_data, N, max_order, device, all_edges_tensors)

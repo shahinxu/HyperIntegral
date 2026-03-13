@@ -452,7 +452,7 @@ def plot_roc(y_true, y_score, label):
     return fpr, tpr, auc_score
 
 for epoch in range(epochs):
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     x_pred = model.forward(t_data)
     physics_loss = model.physics_loss(t_data)
     data_loss = torch.mean((x_pred - x_data)**2)
