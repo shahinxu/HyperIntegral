@@ -228,9 +228,13 @@ def main():
     HypergraphModel, scene_spec = get_scene_model(args.scene)
 
     defaults = HypergraphModel.get_default_params()
-    n_nodes = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
-    max_order_default = defaults["max_order"]
-    max_order = args.max_order if args.max_order is not None else max_order_default
+    if args.scene in {"ecological", "neuronal", "social"}:
+        n_nodes = defaults["n_nodes"]
+        max_order = defaults["max_order"]
+    else:
+        n_nodes = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
+        max_order_default = defaults["max_order"]
+        max_order = args.max_order if args.max_order is not None else max_order_default
     max_order = min(max_order, 5)
 
     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)

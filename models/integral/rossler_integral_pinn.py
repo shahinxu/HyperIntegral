@@ -38,7 +38,6 @@ class TimeResNet(nn.Module):
         ])
         self.output_layer = nn.Linear(hidden_dim, output_dim)
         
-        # Data normalization parameters (will be set during training)
         self.register_buffer('t_mean', torch.tensor(0.0))
         self.register_buffer('t_std', torch.tensor(1.0))
         self.register_buffer('x_mean', torch.zeros(output_dim))

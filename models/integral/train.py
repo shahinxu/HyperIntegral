@@ -572,8 +572,12 @@ if __name__ == "__main__":
     
     HypergraphModel, scene_spec = get_scene_model(args.scene)
     defaults = HypergraphModel.get_default_params()
-    N = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
-    max_order = args.max_order if args.max_order is not None else defaults["max_order"]
+    if args.scene in {"ecological", "neuronal", "social"}:
+        N = defaults["n_nodes"]
+        max_order = defaults["max_order"]
+    else:
+        N = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
+        max_order = args.max_order if args.max_order is not None else defaults["max_order"]
     
     A_learned, edge_config, save_dir = train_integral_model(
         N=N, 

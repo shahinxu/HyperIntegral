@@ -20,11 +20,8 @@ def finite_difference_y(t: np.ndarray, x_tn: np.ndarray) -> np.ndarray:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_nodes", type=int, default=8)
-    parser.add_argument("--max_order", type=int, default=3)
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--noise", type=float, default=0.0)
-    parser.add_argument("--graph_seed", type=int, default=42)
     parser.add_argument("--train_seed", type=int, default=123)
     parser.add_argument("--test_seed", type=int, default=456)
     parser.add_argument("--out_dir", type=str, default="social-data")
@@ -35,11 +32,10 @@ def main():
         out_dir = os.path.join(THIS_DIR, out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    edge_config = HypergraphModel.get_hyperedge_config(
-        args.n_nodes,
-        max_order=args.max_order,
-        seed=args.graph_seed,
-    )
+    defaults = HypergraphModel.get_default_params()
+    n_nodes = defaults["n_nodes"]
+    max_order = defaults["max_order"]
+    edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
 
     edges = [[i - 1, j - 1] for i, j in edge_config.get("edges", [])]
     triangles = [[i - 1, j - 1, k - 1] for i, j, k in edge_config.get("triangles", [])]
@@ -47,7 +43,7 @@ def main():
     quints = [[a - 1, b - 1, c - 1, d - 1, e - 1] for a, b, c, d, e in edge_config.get("quints", [])]
 
     complex_dict = {
-        "nodes": np.arange(args.n_nodes),
+        "nodes": np.arange(n_nodes),
         "edges": edges,
         "triangles": triangles,
         "quads": quads,
@@ -55,7 +51,7 @@ def main():
     }
 
     def export_split(split_name: str, split_seed: int):
-        params = HypergraphModel.SCMParams(n_nodes=args.n_nodes, t_max=50.0, seed=split_seed)
+        params = HypergraphModel.SCMParams(n_nodes=n_nodes, t_max=50.0, seed=split_seed)
         sim = HypergraphModel._simulate(params, complex_dict, n_steps=args.n_samples)
         t = np.asarray(sim["t"], dtype=np.float64)
         x = np.asarray(sim["X_observed"], dtype=np.float64).T  # [T, N], observed only
@@ -77,10 +73,9 @@ def main():
     with open(os.path.join(out_dir, "truth.json"), "w", encoding="utf-8") as f:
         json.dump(
             {
-                "n_nodes": args.n_nodes,
-                "max_order": args.max_order,
+                "n_nodes": n_nodes,
+                "max_order": max_order,
                 "n_samples": args.n_samples,
-                "graph_seed": args.graph_seed,
                 "train_seed": args.train_seed,
                 "test_seed": args.test_seed,
                 "edges": edge_config.get("edges", []),

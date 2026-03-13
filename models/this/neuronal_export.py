@@ -16,8 +16,6 @@ from lib_neuronal_synchronization.hypergraph import HypergraphModel
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_nodes", type=int, default=9)
-    parser.add_argument("--max_order", type=int, default=5)
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--out_dir", type=str, default="neuronal-data")
@@ -28,16 +26,19 @@ def main():
         out_dir = os.path.join(THIS_DIR, out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    edge_config = HypergraphModel.get_hyperedge_config(args.n_nodes, max_order=args.max_order)
+    defaults = HypergraphModel.get_default_params()
+    n_nodes = defaults["n_nodes"]
+    max_order = defaults["max_order"]
+    edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
     t, x_data = HypergraphModel.generate_training_data(
-        args.n_nodes,
+        n_nodes,
         edge_config,
         n_samples=args.n_samples,
         noise=args.noise,
     )
 
     x_tensor = torch.as_tensor(x_data, dtype=torch.float32)
-    y_tensor = HypergraphModel.dynamic_f_batch(x_tensor, args.n_nodes)
+    y_tensor = HypergraphModel.dynamic_f_batch(x_tensor, n_nodes)
 
     # Use theta as scalar node state for THIS (rows=nodes, cols=time)
     X = np.asarray(x_data[:, :, 0].T, dtype=np.float64)
@@ -49,8 +50,8 @@ def main():
     with open(os.path.join(out_dir, "truth.json"), "w", encoding="utf-8") as f:
         json.dump(
             {
-                "n_nodes": args.n_nodes,
-                "max_order": args.max_order,
+                "n_nodes": n_nodes,
+                "max_order": max_order,
                 "n_samples": int(X.shape[1]),
                 "edges": edge_config.get("edges", []),
                 "triangles": edge_config.get("triangles", []),

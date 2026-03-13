@@ -11,7 +11,6 @@ import torch
 from torch import optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-from itertools import combinations
 from sklearn.metrics import roc_curve, auc
 from datetime import datetime
 import networkx as nx
@@ -22,17 +21,16 @@ from lib_ecological_dynamics.hypergraph import HypergraphModel
 # Parse command-line arguments (ecological dynamics only)
 parser = argparse.ArgumentParser(description='Run HyperPINN on ecological hypergraph dynamics')
 parser.add_argument('--M', type=int, default=300, help='Number of time samples')
-parser.add_argument('--N', type=int, default=8, help='Number of species')
-parser.add_argument('--max_order', type=int, default=3)
 parser.add_argument('--gpu_id', type=int, default=4)
 parser.add_argument('--noise', type=float, default=0.0)
 args = parser.parse_args()
 
-N = args.N
-max_order = args.max_order
 gpu_id = args.gpu_id
 noise = args.noise
 M = args.M
+defaults = HypergraphModel.get_default_params()
+N = defaults['n_nodes']
+max_order = defaults['max_order']
 
 
 # Use ecological dynamics from lib_ecological_dynamics to generate data and ground-truth hyperedges
@@ -45,19 +43,18 @@ QuintList_full = np.array(edge_config.get('quints', [])) if edge_config.get('qui
 SextList_full = np.array(edge_config.get('sexts', [])) if edge_config.get('sexts') else np.empty((0, 6), dtype=int)
 SeptList_full = np.array(edge_config.get('septs', [])) if edge_config.get('septs') else np.empty((0, 7), dtype=int)
 
-# Automatically adjust ground truth based on max_order
-TriangleList = TriangleList_full if max_order >= 3 else np.empty((0, 3), dtype=int)
-QuadList = QuadList_full if max_order >= 4 else np.empty((0, 4), dtype=int)
-QuintList = QuintList_full if max_order >= 5 else np.empty((0, 5), dtype=int)
-SextList = SextList_full if max_order >= 6 else np.empty((0, 6), dtype=int)
-SeptList = SeptList_full if max_order >= 7 else np.empty((0, 7), dtype=int)
+TriangleList = TriangleList_full
+QuadList = QuadList_full
+QuintList = QuintList_full
+SextList = SextList_full
+SeptList = SeptList_full
 
-all_2edges = list(combinations(range(1, N+1), 2))
-all_3edges = list(combinations(range(1, N+1), 3)) if max_order >= 3 else []
-all_4edges = list(combinations(range(1, N+1), 4)) if max_order >= 4 else []
-all_5edges = list(combinations(range(1, N+1), 5)) if max_order >= 5 else []
-all_6edges = list(combinations(range(1, N+1), 6)) if max_order >= 6 else []
-all_7edges = list(combinations(range(1, N+1), 7)) if max_order >= 7 else []
+all_2edges = edge_config.get('edges', [])
+all_3edges = edge_config.get('triangles', [])
+all_4edges = edge_config.get('quads', [])
+all_5edges = edge_config.get('quints', [])
+all_6edges = edge_config.get('sexts', [])
+all_7edges = edge_config.get('septs', [])
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)

@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 THIS_ROOT = Path(__file__).resolve().parent
 
 from hypergraph.outputs import write_standard_summary
-from hypergraph.scene_registry import SCENE_REGISTRY
+from hypergraph.scene_registry import SCENE_REGISTRY, get_scene_model
 
 
 SCENE_TO_SCRIPT = {
@@ -26,6 +26,8 @@ SCENE_TO_METRICS = {
     "neuronal": Path("neuronal-data/this_neuronal_metrics.txt"),
     "social": Path("social-data/this_social_metrics.txt"),
 }
+
+FILE_DRIVEN_SCENES = {"ecological", "neuronal", "social"}
 
 
 def parse_metrics_file(path: Path):
@@ -74,7 +76,7 @@ def main():
         "social": "SC",
     }[args.scene]
 
-    if args.max_order is not None:
+    if args.scene not in FILE_DRIVEN_SCENES and args.max_order is not None:
         env[f"{scene_prefix}_ORDER"] = str(args.max_order)
     env[f"{scene_prefix}_SAMPLES"] = str(args.n_samples)
     env[f"{scene_prefix}_NOISE"] = str(args.noise)
@@ -93,6 +95,9 @@ def main():
     if not metrics_path.exists():
         raise RuntimeError(f"Metrics file not found: {metrics_path}")
 
+    HypergraphModel, _ = get_scene_model(args.scene)
+    defaults = HypergraphModel.get_default_params()
+
     auc_scores, extra_metrics = parse_metrics_file(metrics_path)
     write_standard_summary(
         save_dir=str(metrics_path.parent),
@@ -100,7 +105,8 @@ def main():
         scene=SCENE_REGISTRY[args.scene].label,
         config={
             "scene": args.scene,
-            "max_order": args.max_order,
+            "n_nodes": defaults["n_nodes"],
+            "max_order": defaults["max_order"],
             "n_samples": args.n_samples,
             "noise": args.noise,
             "bin_thresh": args.bin_thresh,

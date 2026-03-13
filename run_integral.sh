@@ -2,7 +2,7 @@
 
 set -e
 
-SCENE=${1:-rossler}
+SCENE=${1:-ecological}
 N_SAMPLES=${2:-300}
 NOISE=${3:-0.0}
 GPU_ID=${4:-0}
@@ -14,16 +14,24 @@ RESULTS_ROOT=${9:-results/integral}
 
 echo "======================================="
 echo "Running Integral"
-echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, results_root=${RESULTS_ROOT}"
+if [ "${SCENE}" = "rossler" ]; then
+    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, results_root=${RESULTS_ROOT}"
+else
+    echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, results_root=${RESULTS_ROOT}"
+fi
 echo "======================================="
 
-python -m models.integral.run \
-    --scene "${SCENE}" \
-    --n_samples "${N_SAMPLES}" \
-    --noise "${NOISE}" \
-    --gpu_id "${GPU_ID}" \
-    --n_epochs "${N_EPOCHS}" \
-    --lr "${LR}" \
-    --max_order "${MAX_ORDER}" \
-    --n_nodes "${N_NODES}" \
-    --results_root "${RESULTS_ROOT}"
+CMD=(python -m models.integral.run \
+        --scene "${SCENE}" \
+        --n_samples "${N_SAMPLES}" \
+        --noise "${NOISE}" \
+        --gpu_id "${GPU_ID}" \
+        --n_epochs "${N_EPOCHS}" \
+        --lr "${LR}" \
+        --results_root "${RESULTS_ROOT}")
+
+if [ "${SCENE}" = "rossler" ]; then
+    CMD+=(--max_order "${MAX_ORDER}" --n_nodes "${N_NODES}")
+fi
+
+"${CMD[@]}"

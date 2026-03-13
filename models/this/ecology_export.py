@@ -15,8 +15,6 @@ from lib_ecological_dynamics.hypergraph import HypergraphModel
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_nodes", type=int, default=9)
-    parser.add_argument("--max_order", type=int, default=5)
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
@@ -28,7 +26,10 @@ def main():
         out_dir = os.path.join(THIS_DIR, out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    edge_config = HypergraphModel.get_hyperedge_config(args.n_nodes, max_order=args.max_order, seed=args.seed)
+    defaults = HypergraphModel.get_default_params()
+    n_nodes = defaults["n_nodes"]
+    max_order = defaults["max_order"]
+    edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order, seed=args.seed)
 
     cached = HypergraphModel._cached_hypergraph
     if cached is None:
@@ -62,8 +63,8 @@ def main():
     with open(os.path.join(out_dir, "truth.json"), "w", encoding="utf-8") as f:
         json.dump(
             {
-                "n_nodes": args.n_nodes,
-                "max_order": args.max_order,
+                "n_nodes": n_nodes,
+                "max_order": max_order,
                 "n_samples": int(X.shape[1]),
                 "edges": edge_config.get("edges", []),
                 "triangles": edge_config.get("triangles", []),

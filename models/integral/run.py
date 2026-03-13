@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FILE_DRIVEN_SCENES = {"ecological", "neuronal", "social"}
 
 
 def main():
@@ -45,9 +46,9 @@ def main():
         "--results_root",
         args.results_root,
     ]
-    if args.max_order is not None:
+    if args.scene not in FILE_DRIVEN_SCENES and args.max_order is not None:
         cmd.extend(["--max_order", str(args.max_order)])
-    if args.n_nodes is not None:
+    if args.scene not in FILE_DRIVEN_SCENES and args.n_nodes is not None:
         cmd.extend(["--n_nodes", str(args.n_nodes)])
 
     proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))

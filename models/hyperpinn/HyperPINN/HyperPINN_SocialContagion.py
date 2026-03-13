@@ -11,7 +11,6 @@ import torch
 from torch import optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-from itertools import combinations
 from sklearn.metrics import roc_curve, auc
 from datetime import datetime
 import networkx as nx
@@ -21,17 +20,16 @@ from lib_social_contagion.hypergraph import HypergraphModel as SCMHypergraphMode
 
 parser = argparse.ArgumentParser(description="Run HyperPINN on social contagion hypergraph dynamics")
 parser.add_argument("--M", type=int, default=300, help="Number of time samples")
-parser.add_argument("--N", type=int, default=8, help="Number of nodes")
-parser.add_argument("--max_order", type=int, default=3, help="Maximum hyperedge order (2, 3, or 4 for contagion)")
 parser.add_argument("--gpu_id", type=int, default=0)
 parser.add_argument("--noise", type=float, default=0.0)
 args = parser.parse_args()
 
-N = args.N
-max_order = args.max_order
 M = args.M
 gpu_id = args.gpu_id
 noise = args.noise
+defaults = SCMHypergraphModel.get_default_params()
+N = defaults["n_nodes"]
+max_order = defaults["max_order"]
 
 # ---------------------------------------------------------------------------
 # Ground-truth hypergraph and data generation
@@ -42,17 +40,17 @@ EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") el
 TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
 QuadList = np.array(edge_config.get("quads", [])) if edge_config.get("quads") else np.empty((0, 4), dtype=int)
 
-all_2edges = list(combinations(range(1, N + 1), 2))
-all_3edges = list(combinations(range(1, N + 1), 3)) if max_order >= 3 else []
-all_4edges = list(combinations(range(1, N + 1), 4)) if max_order >= 4 else []
-all_5edges = []
+all_2edges = edge_config.get("edges", [])
+all_3edges = edge_config.get("triangles", [])
+all_4edges = edge_config.get("quads", [])
+all_5edges = edge_config.get("quints", [])
 all_6edges = []
 all_7edges = []
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
 true_4edges = set(tuple(sorted(quad)) for quad in QuadList)
-true_5edges = set()
+true_5edges = set(tuple(sorted(edge)) for edge in all_5edges)
 true_6edges = set()
 true_7edges = set()
 

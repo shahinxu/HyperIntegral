@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from hypergraph.outputs import write_standard_summary
-from hypergraph.scene_registry import SCENE_REGISTRY
+from hypergraph.scene_registry import SCENE_REGISTRY, get_scene_model
 
 
 SCENE_TO_SCRIPT = {
@@ -21,6 +21,8 @@ SCENE_TO_SCRIPT = {
     "rossler": "HyperPINN_Rossler.py",
     "social": "HyperPINN_SocialContagion.py",
 }
+
+FILE_DRIVEN_SCENES = {"ecological", "neuronal", "social"}
 
 
 def _safe_max_order(n_nodes: int | None, requested_max_order: int | None) -> int | None:
@@ -74,7 +76,7 @@ def main():
     args = parser.parse_args()
 
     effective_max_order = _safe_max_order(args.n_nodes, args.max_order)
-    if args.max_order is not None and effective_max_order is not None and effective_max_order < args.max_order:
+    if args.scene not in FILE_DRIVEN_SCENES and args.max_order is not None and effective_max_order is not None and effective_max_order < args.max_order:
         print(
             f"[hyperpinn] max_order={args.max_order} is unsafe for n_nodes={args.n_nodes}; "
             f"using max_order={effective_max_order} to avoid OOM."
@@ -83,9 +85,9 @@ def main():
     script = SCENE_TO_SCRIPT[args.scene]
     script_path = HYPERPINN_ROOT / script
     cmd = [sys.executable, str(script_path), "--M", str(args.n_samples), "--gpu_id", str(args.gpu_id), "--noise", str(args.noise)]
-    if args.n_nodes is not None:
+    if args.scene not in FILE_DRIVEN_SCENES and args.n_nodes is not None:
         cmd.extend(["--N", str(args.n_nodes)])
-    if effective_max_order is not None:
+    if args.scene not in FILE_DRIVEN_SCENES and effective_max_order is not None:
         cmd.extend(["--max_order", str(effective_max_order)])
 
     # Run from project root so HyperPINN writes results into top-level results_* directories.
@@ -108,6 +110,9 @@ def main():
         if not results_path.exists():
             results_path = BASELINE_ROOT / results_dir
 
+    HypergraphModel, _ = get_scene_model(args.scene)
+    defaults = HypergraphModel.get_default_params()
+
     auc_scores = parse_auc_file(results_path / "auc_scores.txt")
     write_standard_summary(
         save_dir=str(results_path),
@@ -116,8 +121,8 @@ def main():
         config={
             "scene": args.scene,
             "n_samples": args.n_samples,
-            "n_nodes": args.n_nodes,
-            "max_order": effective_max_order,
+            "n_nodes": defaults["n_nodes"] if args.scene in FILE_DRIVEN_SCENES else args.n_nodes,
+            "max_order": defaults["max_order"] if args.scene in FILE_DRIVEN_SCENES else effective_max_order,
             "gpu_id": args.gpu_id,
             "noise": args.noise,
         },

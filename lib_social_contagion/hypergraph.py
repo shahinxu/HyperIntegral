@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import combinations
+from pathlib import Path
+import json
+import os
 
 import numpy as np
 import torch
@@ -9,151 +11,82 @@ from scipy.integrate import solve_ivp
 
 
 class HypergraphModel:
-    _cached_edges = None
-    _cached_triangles = None
-
-    @dataclass
-    class RSCParams:
-        n_nodes: int = 2000
-        k_mean: float = 20.0
-        k_delta: float = 6.0
-        seed: int = 42
-        enforce_closure: bool = True
-
     @dataclass
     class SCMParams:
-        n_nodes: int = 2000
+        n_nodes: int = 60
         t_max: float = 50.0
         beta: float = 0.5
         beta_delta: float = 2.0
         mu: float = 0.4
         seed: int = 123
 
+    @staticmethod
+    def _preset_hypergraph_file() -> Path:
+        return Path(__file__).resolve().parent / "presets" / "social_contagion_n60_hypergraph.json"
 
     @staticmethod
-    def _rsc_probabilities(n_nodes: int, k_mean: float, k_delta: float) -> tuple[float, float]:
-        if n_nodes < 3:
-            raise ValueError("n_nodes must be >= 3 for 2-simplices")
-        if k_delta < 0:
-            raise ValueError("k_delta must be >= 0")
-
-        denom = (n_nodes - 1) - 2.0 * k_delta
-        if denom <= 0:
-            raise ValueError("k_mean and k_delta are inconsistent with n_nodes")
-
-        p1 = (k_mean - 2.0 * k_delta) / denom
-        p_delta = 2.0 * k_delta / ((n_nodes - 1) * (n_nodes - 2))
-
-        if not (0.0 <= p1 <= 1.0):
-            raise ValueError("p1 is outside [0, 1]; check k_mean and k_delta")
-        if not (0.0 <= p_delta <= 1.0):
-            raise ValueError("p_delta is outside [0, 1]; check k_delta and n_nodes")
-
-        return p1, p_delta
+    def _load_hypergraph_payload(file_path: Path) -> dict:
+        with file_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
     @staticmethod
-    def _unrank_pair(n_nodes: int, rank: int) -> tuple[int, int]:
-        for i in range(n_nodes - 1):
-            count = n_nodes - i - 1
-            if rank < count:
-                return i, i + 1 + rank
-            rank -= count
-        raise ValueError("Pair rank out of range")
+    def _payload_n_nodes(payload: dict) -> int:
+        if "n_nodes" in payload:
+            return int(payload["n_nodes"])
+
+        index_base = int(payload.get("index_base", 1))
+        max_node = 0
+        for key in ("edges", "triangles", "quads", "quints"):
+            for edge in payload.get(key, []):
+                if edge:
+                    max_node = max(max_node, *(int(u) for u in edge))
+        return max(0, max_node - index_base + 1)
 
     @staticmethod
-    def _unrank_triplet(n_nodes: int, rank: int) -> tuple[int, int, int]:
-        for i in range(n_nodes - 2):
-            count_i = (n_nodes - i - 1) * (n_nodes - i - 2) // 2
-            if rank < count_i:
-                for j in range(i + 1, n_nodes - 1):
-                    count_j = n_nodes - j - 1
-                    if rank < count_j:
-                        return i, j, j + 1 + rank
-                    rank -= count_j
-            rank -= count_i
-        raise ValueError("Triplet rank out of range")
+    def _payload_max_order(payload: dict) -> int:
+        for order, key in ((5, "quints"), (4, "quads"), (3, "triangles"), (2, "edges")):
+            if payload.get(key):
+                return order
+        return 0
 
     @staticmethod
-    def _sample_unique_combinations(
-        n_nodes: int,
-        order: int,
-        p: float,
-        rng: np.random.Generator,
-    ) -> list[tuple[int, ...]]:
-        total = 1
-        for i in range(order):
-            total = total * (n_nodes - i) // (i + 1)
-        m = int(rng.binomial(total, p))
-        if m == 0:
-            return []
-
-        ranks = rng.choice(total, size=m, replace=False)
-        ranks.sort()
-
-        if order == 2:
-            return [HypergraphModel._unrank_pair(n_nodes, int(r)) for r in ranks]
-        if order == 3:
-            return [HypergraphModel._unrank_triplet(n_nodes, int(r)) for r in ranks]
-
-        raise ValueError("Only order=2 or order=3 are supported")
+    def _resolve_hypergraph_file(hypergraph_file: str | None = None) -> Path:
+        env_path = os.getenv("SOCIAL_CONTAGION_HYPERGRAPH_FILE", "").strip()
+        if env_path:
+            return Path(env_path)
+        if hypergraph_file:
+            return Path(hypergraph_file)
+        return HypergraphModel._preset_hypergraph_file()
 
     @staticmethod
-    def _build_rsc_simplicial_complex(params: "HypergraphModel.RSCParams") -> dict:
-        rng = np.random.default_rng(params.seed)
-        p1, p_delta = HypergraphModel._rsc_probabilities(params.n_nodes, params.k_mean, params.k_delta)
+    def _load_hypergraph_config(hypergraph_file: str | None = None) -> dict:
+        file_path = HypergraphModel._resolve_hypergraph_file(hypergraph_file)
+        payload = HypergraphModel._load_hypergraph_payload(file_path)
+        index_base = int(payload.get("index_base", 1))
 
-        edges = HypergraphModel._sample_unique_combinations(params.n_nodes, 2, p1, rng)
-        triangles = HypergraphModel._sample_unique_combinations(params.n_nodes, 3, p_delta, rng)
-
-        edge_set = {tuple(sorted(e)) for e in edges}
-        if params.enforce_closure:
-            for i, j, k in triangles:
-                edge_set.add(tuple(sorted((i, j))))
-                edge_set.add(tuple(sorted((i, k))))
-                edge_set.add(tuple(sorted((j, k))))
-
-        edges = sorted(edge_set)
-        triangles = sorted({tuple(sorted(t)) for t in triangles})
+        def normalize(key: str):
+            return [
+                [int(u) - index_base + 1 for u in edge]
+                for edge in payload.get(key, [])
+            ]
 
         return {
-            "nodes": np.arange(params.n_nodes, dtype=int),
-            "edges": edges,
-            "triangles": triangles,
-            "p1": p1,
-            "p_delta": p_delta,
-            "k_mean_target": params.k_mean,
-            "k_delta_target": params.k_delta,
-            "seed": params.seed,
-            "enforce_closure": params.enforce_closure,
+            "edges": normalize("edges"),
+            "triangles": normalize("triangles"),
+            "quads": normalize("quads"),
+            "quints": normalize("quints"),
+            "n_nodes": HypergraphModel._payload_n_nodes(payload),
+            "max_order": HypergraphModel._payload_max_order(payload),
         }
 
     @staticmethod
-    def _build_edge_adjacency(edges: list[tuple[int, int]], n_nodes: int) -> list[list[int]]:
-        adjacency = [[] for _ in range(n_nodes)]
-        for i, j in edges:
-            adjacency[i].append(j)
-            adjacency[j].append(i)
-        return adjacency
-
-    @staticmethod
-    def _build_triangle_pairs(triangles: list[tuple[int, int, int]], n_nodes: int) -> list[list[tuple[int, int]]]:
-        pairs = [[] for _ in range(n_nodes)]
-        for i, j, k in triangles:
-            pairs[i].append((j, k))
-            pairs[j].append((i, k))
-            pairs[k].append((i, j))
-        return pairs
-
-    @staticmethod
-    def _cache_hyperedges(edges: list[list[int]], triangles: list[list[int]]) -> None:
-        HypergraphModel._cached_edges = [list(e) for e in edges]
-        HypergraphModel._cached_triangles = [list(t) for t in triangles]
-
-    @staticmethod
-    def _edge_config_to_zero_based(edge_config: dict) -> tuple[list[list[int]], list[list[int]]]:
-        edges = [[i - 1, j - 1] for i, j in edge_config.get("edges", [])]
-        triangles = [[i - 1, j - 1, k - 1] for i, j, k in edge_config.get("triangles", [])]
-        return edges, triangles
+    def _edge_config_n_nodes(edge_config: dict) -> int:
+        max_node = 0
+        for key in ("edges", "triangles", "quads", "quints"):
+            for edge in edge_config.get(key, []):
+                if edge:
+                    max_node = max(max_node, *(int(u) for u in edge))
+        return max_node
 
     @staticmethod
     def generate_training_data(
@@ -167,56 +100,30 @@ class HypergraphModel:
         # trajectories can be generated on the same underlying
         # hypergraph by varying the random seed.
         scm_seed = 123 if seed is None else seed
-        params = HypergraphModel.SCMParams(n_nodes=n_nodes, t_max=50, seed=scm_seed)
+        inferred_n_nodes = HypergraphModel._edge_config_n_nodes(edge_config)
+        params = HypergraphModel.SCMParams(n_nodes=inferred_n_nodes or n_nodes, t_max=50, seed=scm_seed)
         complex_dict = {
             "edges": [],
             "triangles": [],
             "quads": [],
             "quints": [],
-            "nodes": np.arange(n_nodes),
+            "nodes": np.arange(params.n_nodes),
         }
-        
-        if "edges" in edge_config:
-            e_list = edge_config["edges"]
-            if len(e_list) > 0:
-                e_arr = np.array(e_list)
-                if e_arr.min() >= 1:
-                    complex_dict["edges"] = (e_arr - 1).tolist()
-                else:
-                    complex_dict["edges"] = e_list
-                    
-        if "triangles" in edge_config:
-            t_list = edge_config["triangles"]
-            if len(t_list) > 0:
-                t_arr = np.array(t_list)
-                if t_arr.min() >= 1:
-                    complex_dict["triangles"] = (t_arr - 1).tolist()
-                else:
-                    complex_dict["triangles"] = t_list
 
-        # Optional 4-body (quad) interactions in the ground-truth
-        if "quads" in edge_config:
-            q_list = edge_config["quads"]
-            if len(q_list) > 0:
-                q_arr = np.array(q_list)
-                if q_arr.min() >= 1:
-                    complex_dict["quads"] = (q_arr - 1).tolist()
-                else:
-                    complex_dict["quads"] = q_list
+        def _to_zero_based(items: list[list[int]]) -> list[list[int]]:
+            if len(items) == 0:
+                return []
+            arr = np.array(items)
+            if arr.min() >= 1:
+                return (arr - 1).tolist()
+            return items
 
-        # Optional 5-body interactions in the ground-truth
-        if "quints" in edge_config:
-            p5_list = edge_config["quints"]
-            if len(p5_list) > 0:
-                p5_arr = np.array(p5_list)
-                if p5_arr.min() >= 1:
-                    complex_dict["quints"] = (p5_arr - 1).tolist()
-                else:
-                    complex_dict["quints"] = p5_list
+        complex_dict["edges"] = _to_zero_based(edge_config.get("edges", []))
+        complex_dict["triangles"] = _to_zero_based(edge_config.get("triangles", []))
+        complex_dict["quads"] = _to_zero_based(edge_config.get("quads", []))
+        complex_dict["quints"] = _to_zero_based(edge_config.get("quints", []))
 
         result = HypergraphModel._simulate(params, complex_dict, n_steps=n_samples)
-        HypergraphModel._cached_edges = complex_dict["edges"]
-        HypergraphModel._cached_triangles = complex_dict["triangles"]
 
         t = result["t"]
         x_observed = result["X_observed"].T[:, :, None]
@@ -323,6 +230,7 @@ class HypergraphModel:
 
     @staticmethod
     def dynamic_f(x: torch.Tensor, n_nodes: int) -> torch.Tensor:
+        _ = n_nodes
         # The drift part of the ODE: f(x) = -mu * x
         # This is the part INDEPENDENT of the unknown structure
         params = HypergraphModel.SCMParams()
@@ -347,6 +255,7 @@ class HypergraphModel:
         n_nodes: int,
         device: torch.device,
     ) -> torch.Tensor:
+        _ = n_nodes
         # The interaction part: Phi(x) * A
         # For each candidate edge/triangle, compute its contribution term
         # Term = (1 - x_i) * force
@@ -358,17 +267,17 @@ class HypergraphModel:
 
         if x.ndim == 1:
             x_vec = x
-            d = 1
         else:
             x_vec = x[:, 0]
-            d = x.shape[1]
+
+        n = x_vec.shape[0]
 
         # Precompute (1-x)
         susceptible = 1.0 - x_vec
         
         # Phi shape: (N_nodes, Dimension_of_states, N_candidates)
         # Here Dimension is 1 (infection probability)
-        Phi = torch.zeros((n_nodes, 1, n_total), device=device, dtype=x.dtype)
+        Phi = torch.zeros((n, 1, n_total), device=device, dtype=x.dtype)
         edge_idx = 0
 
         # 1. Candidate Edges (Pairwise)
@@ -472,87 +381,27 @@ class HypergraphModel:
         k_delta: float = 6.0,
         seed: int = 42,
         enforce_closure: bool = True,
+        hypergraph_file: str | None = None,
     ) -> dict:
-        if n_nodes == 8:
-            config = {
-                "edges": [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8]],
-                "triangles": [[1, 2, 3], [2, 4, 5], [5, 6, 7], [6, 7, 8]],
-            }
-            # Hand-crafted 4-body interactions for the 8-node toy
-            # example when max_order >= 4 so that order-4 has actual
-            # positive samples to learn.
-            if max_order >= 4:
-                config["quads"] = [
-                    [1, 2, 3, 4],
-                    [2, 3, 4, 5],
-                    [4, 5, 6, 7],
-                    [5, 6, 7, 8],
-                ]
-            if max_order >= 5:
-                config["quints"] = [
-                    [1, 2, 3, 4, 5],
-                    [2, 3, 4, 5, 6],
-                    [3, 4, 5, 6, 7],
-                    [4, 5, 6, 7, 8],
-                ]
-        else:
-            params = HypergraphModel.RSCParams(
-                n_nodes=n_nodes,
-                k_mean=k_mean,
-                k_delta=k_delta,
-                seed=seed,
-                enforce_closure=enforce_closure,
-            )
-            complex_dict = HypergraphModel._build_rsc_simplicial_complex(params)
-
-            edges_1b = [[i + 1, j + 1] for i, j in complex_dict["edges"]]
-            triangles_1b = [[i + 1, j + 1, k + 1] for i, j, k in complex_dict["triangles"]]
-
-            config = {
-                "edges": edges_1b,
-                "triangles": triangles_1b,
-            }
-
-        edges_0b, triangles_0b = HypergraphModel._edge_config_to_zero_based(config)
-        HypergraphModel._cache_hyperedges(edges_0b, triangles_0b)
+        _ = (n_nodes, max_order, k_mean, k_delta, seed, enforce_closure)
+        config = HypergraphModel._load_hypergraph_config(hypergraph_file)
 
         return {
-            "edges": config["edges"] if max_order >= 2 else [],
-            "triangles": config["triangles"] if max_order >= 3 else [],
-            "quads": config.get("quads", []) if max_order >= 4 else [],
-            "quints": config.get("quints", []) if max_order >= 5 else [],
+            "edges": config["edges"],
+            "triangles": config["triangles"],
+            "quads": config.get("quads", []),
+            "quints": config.get("quints", []),
         }
 
     @staticmethod
     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
-        all_possible = {}
-
-        if max_order >= 2:
-            all_possible["edges"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 2)]
-        else:
-            all_possible["edges"] = []
-
-        if max_order >= 3:
-            all_possible["triangles"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
-        else:
-            all_possible["triangles"] = []
-
-        if max_order >= 4:
-            all_possible["quads"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 4)]
-        else:
-            all_possible["quads"] = []
-
-        if max_order >= 5:
-            all_possible["quints"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 5)]
-        else:
-            all_possible["quints"] = []
-
-        return all_possible
+        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
 
 
     @staticmethod
     def get_default_params() -> dict:
+        config = HypergraphModel._load_hypergraph_config()
         return {
-            "n_nodes": 8,
-            "max_order": 3,
+            "n_nodes": config["n_nodes"],
+            "max_order": config["max_order"],
         }

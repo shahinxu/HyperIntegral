@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import combinations
+from pathlib import Path
+import json
+import os
 
 import numpy as np
 import torch
@@ -11,23 +13,19 @@ from scipy.integrate import solve_ivp
 class HypergraphModel:
     _cached_params = None
     _cached_hypergraph = None
+
     @dataclass
     class EcologicalHypergraphParams:
-        n_species: int = 9
-        n_producers: int = 3
-        n_primary_consumers: int = 3
-        n_secondary_consumers: int = 3
+        n_species: int = 60
+        n_producers: int = 20
+        n_primary_consumers: int = 20
+        n_secondary_consumers: int = 20
 
         t_span: tuple = (0.0, 420.0)
         n_steps: int = 4200
         seed: int = 42
         rtol: float = 1e-8
         atol: float = 1e-10
-
-        target_incidence_per_node_order2: int = 5
-        target_incidence_per_node_order3: int = 5
-        target_incidence_per_node_order4: int = 5
-        target_incidence_per_node_order5: int = 5
 
         producer_growth_mean: float = 1.20
         producer_growth_std: float = 0.05
@@ -46,53 +44,117 @@ class HypergraphModel:
         w4: float = 0.30
         w5: float = 0.40
 
-        target_prey_per_primary: int = 2
-        target_prey_per_secondary: int = 2
-        attack_p_to_c1: float = 2.2
-        attack_c1_to_c2: float = 1.6
-        half_sat: float = 0.01
-        eta_p_to_c1: float = 0.55
-        eta_c1_to_c2: float = 0.35
+        designed_hypergraph_file: str | None = None
 
     @staticmethod
-    def _validate_params(params: "HypergraphModel.EcologicalHypergraphParams"):
-        total = params.n_producers + params.n_primary_consumers + params.n_secondary_consumers
-        if total != params.n_species:
-            raise ValueError("n_species must equal n_producers + n_primary_consumers + n_secondary_consumers")
+    def _preset_hypergraph_file() -> Path:
+        return Path(__file__).resolve().parent / "presets" / "ecological_dynamics_n60_hypergraph.json"
 
     @staticmethod
-    def _sample_sparse_hyperedges(
-        n: int,
-        order: int,
-        target_incidence_per_node: int,
-        rng: np.random.Generator,
-    ):
-        candidates = list(combinations(range(n), order))
-        if not candidates:
-            return []
+    def _load_hypergraph_payload(file_path: Path) -> dict:
+        with file_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
-        m_target = max(n // 2, int(round(n * target_incidence_per_node / order)))
-        m_target = min(m_target, len(candidates))
+    @staticmethod
+    def _payload_n_nodes(payload: dict) -> int:
+        if "n_nodes" in payload:
+            return int(payload["n_nodes"])
 
-        picked_idx = set(rng.choice(len(candidates), size=m_target, replace=False).tolist())
+        index_base = int(payload.get("index_base", 0))
+        max_node = 0
+        for key in ("edges2", "edges3", "edges4", "edges5"):
+            for edge in payload.get(key, []):
+                if edge:
+                    max_node = max(max_node, *(int(u) for u in edge))
+        for item in payload.get("pred_edges", []):
+            max_node = max(max_node, int(item[0]), int(item[1]))
+        return max(0, max_node - index_base + 1)
 
-        node_cover = {i: 0 for i in range(n)}
-        for idx in picked_idx:
-            for node in candidates[idx]:
-                node_cover[node] += 1
+    @staticmethod
+    def _payload_max_order(payload: dict) -> int:
+        for order, key in ((5, "edges5"), (4, "edges4"), (3, "edges3"), (2, "edges2")):
+            if payload.get(key):
+                return order
+        return 0
 
-        for node in range(n):
-            if node_cover[node] > 0:
+    @staticmethod
+    def _resolve_designed_hypergraph_file(params: "HypergraphModel.EcologicalHypergraphParams") -> Path | None:
+        env_path = os.getenv("ECOLOGY_HYPERGRAPH_FILE", "").strip()
+        if env_path:
+            return Path(env_path)
+
+        if params.designed_hypergraph_file:
+            return Path(params.designed_hypergraph_file)
+
+        return HypergraphModel._preset_hypergraph_file()
+
+    @staticmethod
+    def _normalize_edges(raw_edges, index_base: int) -> list[tuple[int, ...]]:
+        normalized = []
+        seen = set()
+        for edge in raw_edges:
+            edge0 = tuple(sorted(int(u) - index_base for u in edge))
+            if edge0 in seen:
                 continue
-            contain_node = [i for i, e in enumerate(candidates) if node in e]
-            if not contain_node:
-                continue
-            add_idx = int(rng.choice(contain_node))
-            picked_idx.add(add_idx)
-            for u in candidates[add_idx]:
-                node_cover[u] += 1
+            seen.add(edge0)
+            normalized.append(edge0)
+        return normalized
 
-        return [candidates[i] for i in sorted(picked_idx)]
+    @staticmethod
+    def _load_designed_hyperedges(file_path: Path) -> dict:
+        payload = HypergraphModel._load_hypergraph_payload(file_path)
+        index_base = int(payload.get("index_base", 0))
+
+        pred_edges_raw = payload.get("pred_edges", [])
+        pred_edges = []
+        for item in pred_edges_raw:
+            prey = int(item[0]) - index_base
+            predator = int(item[1]) - index_base
+            attack = float(item[2])
+            eta = float(item[3])
+            pred_edges.append((prey, predator, attack, eta))
+
+        return {
+            "edges2": HypergraphModel._normalize_edges(payload.get("edges2", []), index_base),
+            "edges3": HypergraphModel._normalize_edges(payload.get("edges3", []), index_base),
+            "edges4": HypergraphModel._normalize_edges(payload.get("edges4", []), index_base),
+            "edges5": HypergraphModel._normalize_edges(payload.get("edges5", []), index_base),
+            "pred_edges": pred_edges,
+            "n_nodes": HypergraphModel._payload_n_nodes(payload),
+            "max_order": HypergraphModel._payload_max_order(payload),
+        }
+
+    @staticmethod
+    def _edge_config_n_nodes(edge_config: dict) -> int:
+        max_node = 0
+        for key in ("edges", "triangles", "quads", "quints", "sexts", "septs"):
+            for edge in edge_config.get(key, []):
+                if edge:
+                    max_node = max(max_node, *(int(u) for u in edge))
+        return max_node
+
+    @staticmethod
+    def _params_from_hypergraph_file(
+        seed: int = 42,
+        n_steps: int = 4200,
+        hypergraph_file: str | None = None,
+    ) -> "HypergraphModel.EcologicalHypergraphParams":
+        params = HypergraphModel.EcologicalHypergraphParams(seed=seed, n_steps=n_steps, designed_hypergraph_file=hypergraph_file)
+        file_path = HypergraphModel._resolve_designed_hypergraph_file(params)
+        designed = HypergraphModel._load_designed_hyperedges(file_path)
+        n_species = designed["n_nodes"]
+        n_producers = max(1, n_species // 3)
+        n_primary = max(1, n_species // 3)
+        n_secondary = max(1, n_species - n_producers - n_primary)
+        return HypergraphModel.EcologicalHypergraphParams(
+            n_species=n_species,
+            n_producers=n_producers,
+            n_primary_consumers=n_primary,
+            n_secondary_consumers=n_secondary,
+            seed=seed,
+            n_steps=n_steps,
+            designed_hypergraph_file=hypergraph_file,
+        )
 
     @staticmethod
     def _build_trophic_groups(params: "HypergraphModel.EcologicalHypergraphParams"):
@@ -104,57 +166,16 @@ class HypergraphModel:
         return p, c1, c2
 
     @staticmethod
-    def _build_predation_edges(params: "HypergraphModel.EcologicalHypergraphParams", rng: np.random.Generator):
-        p, c1, c2 = HypergraphModel._build_trophic_groups(params)
-
-        pred_edges = []
-
-        n_prey_p = len(p)
-        k1 = max(1, min(params.target_prey_per_primary, n_prey_p))
-        for pred_pos, predator in enumerate(c1):
-            for shift in range(k1):
-                prey = p[(pred_pos + shift) % n_prey_p]
-                pred_edges.append((int(prey), int(predator), params.attack_p_to_c1, params.eta_p_to_c1))
-
-        n_prey_c1 = len(c1)
-        k2 = max(1, min(params.target_prey_per_secondary, n_prey_c1))
-        for pred_pos, predator in enumerate(c2):
-            for shift in range(k2):
-                prey = c1[(pred_pos + shift) % n_prey_c1]
-                pred_edges.append((int(prey), int(predator), params.attack_c1_to_c2, params.eta_c1_to_c2))
-
-        return pred_edges
-
-    @staticmethod
-    def _build_sparse_hypergraph_and_foodchain(params: "HypergraphModel.EcologicalHypergraphParams", rng: np.random.Generator):
+    def _build_sparse_hypergraph_and_foodchain(params: "HypergraphModel.EcologicalHypergraphParams"):
         nodes = np.arange(params.n_species, dtype=int)
 
-        edges2 = HypergraphModel._sample_sparse_hyperedges(
-            n=params.n_species,
-            order=2,
-            target_incidence_per_node=params.target_incidence_per_node_order2,
-            rng=rng,
-        )
-        edges3 = HypergraphModel._sample_sparse_hyperedges(
-            n=params.n_species,
-            order=3,
-            target_incidence_per_node=params.target_incidence_per_node_order3,
-            rng=rng,
-        )
-        edges4 = HypergraphModel._sample_sparse_hyperedges(
-            n=params.n_species,
-            order=4,
-            target_incidence_per_node=params.target_incidence_per_node_order4,
-            rng=rng,
-        )
-        edges5 = HypergraphModel._sample_sparse_hyperedges(
-            n=params.n_species,
-            order=5,
-            target_incidence_per_node=params.target_incidence_per_node_order5,
-            rng=rng,
-        )
-
-        pred_edges = HypergraphModel._build_predation_edges(params, rng)
+        custom_file = HypergraphModel._resolve_designed_hypergraph_file(params)
+        designed = HypergraphModel._load_designed_hyperedges(custom_file)
+        edges2 = designed["edges2"]
+        edges3 = designed["edges3"]
+        edges4 = designed["edges4"]
+        edges5 = designed["edges5"]
+        pred_edges = designed["pred_edges"]
         producers, primary, secondary = HypergraphModel._build_trophic_groups(params)
 
         return {
@@ -183,7 +204,6 @@ class HypergraphModel:
     def _predation_term(
         x: np.ndarray,
         pred_edges: list[tuple[int, int, float, float]],
-        half_sat: float,
     ) -> np.ndarray:
         term = np.zeros_like(x)
         for prey, predator, attack, eta in pred_edges:
@@ -229,16 +249,15 @@ class HypergraphModel:
         if "edges5" in hypergraph:
             dx += HypergraphModel._hyperedge_competition_term(x, hypergraph["edges5"], params.w5)
 
-        dx += HypergraphModel._predation_term(x, hypergraph["pred_edges"], params.half_sat)
+        dx += HypergraphModel._predation_term(x, hypergraph["pred_edges"])
 
         return dx
 
     @staticmethod
     def _simulate(params: "HypergraphModel.EcologicalHypergraphParams"):
-        HypergraphModel._validate_params(params)
         rng = np.random.default_rng(params.seed)
 
-        hypergraph = HypergraphModel._build_sparse_hypergraph_and_foodchain(params, rng)
+        hypergraph = HypergraphModel._build_sparse_hypergraph_and_foodchain(params)
 
         producer_growth_rates = rng.normal(params.producer_growth_mean, params.producer_growth_std, size=params.n_producers)
         producer_growth_rates = np.clip(producer_growth_rates, 0.55, 0.95)
@@ -271,9 +290,6 @@ class HypergraphModel:
 
     @staticmethod
     def dynamic_f(x: torch.Tensor, n_nodes: int, t: torch.Tensor | float | None = None) -> torch.Tensor:
-        if HypergraphModel._cached_params is None or HypergraphModel._cached_hypergraph is None:
-            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
-
         params = HypergraphModel._cached_params
         hypergraph = HypergraphModel._cached_hypergraph
 
@@ -283,9 +299,6 @@ class HypergraphModel:
         else:
             x_flat = x[:, 0]
             out_shape = x.shape
-
-        if x_flat.numel() != n_nodes:
-            raise ValueError(f"n_nodes mismatch: got {n_nodes}, but x has {x_flat.numel()} entries")
 
         device = x_flat.device
         dtype = x_flat.dtype
@@ -344,9 +357,6 @@ class HypergraphModel:
         Competition hyperedges are intentionally excluded here and are
         handled separately via the topology-dependent competition term.
         """
-        if HypergraphModel._cached_params is None or HypergraphModel._cached_hypergraph is None:
-            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
-
         params = HypergraphModel._cached_params
         hypergraph = HypergraphModel._cached_hypergraph
 
@@ -355,9 +365,6 @@ class HypergraphModel:
             x_flat = x[:, :, 0]
         else:
             x_flat = x
-
-        if x_flat.shape[1] != n_nodes:
-            raise ValueError(f"n_nodes mismatch: got {n_nodes}, but x has {x_flat.shape[1]} columns")
 
         if t.ndim > 1:
             t_flat = t.squeeze(-1)
@@ -430,9 +437,6 @@ class HypergraphModel:
         n_nodes: int,
         device: torch.device,
     ) -> torch.Tensor:
-        if HypergraphModel._cached_params is None:
-            raise ValueError("Ecological cache is empty. Call get_hyperedge_config() or generate_training_data() first.")
-
         params = HypergraphModel._cached_params
 
         n_total = 0
@@ -510,18 +514,9 @@ class HypergraphModel:
         return Phi
 
     @staticmethod
-    def get_hyperedge_config(n_nodes: int, max_order: int = 5, seed: int = 42) -> dict:
-        n_producers = max(1, n_nodes // 3)
-        n_primary = max(1, n_nodes // 3)
-        n_secondary = max(1, n_nodes - n_producers - n_primary)
-
-        params = HypergraphModel.EcologicalHypergraphParams(
-            n_species=n_nodes,
-            n_producers=n_producers,
-            n_primary_consumers=n_primary,
-            n_secondary_consumers=n_secondary,
-            seed=seed,
-        )
+    def get_hyperedge_config(n_nodes: int, max_order: int = 5, seed: int = 42, hypergraph_file: str | None = None) -> dict:
+        _ = (n_nodes, max_order)
+        params = HypergraphModel._params_from_hypergraph_file(seed=seed, hypergraph_file=hypergraph_file)
 
         result = HypergraphModel._simulate(params)
         HypergraphModel._cached_params = params
@@ -537,55 +532,42 @@ class HypergraphModel:
         quints_1b = [[i + 1, j + 1, k + 1, l + 1, m + 1] for i, j, k, l, m in edges5]
 
         return {
-            "edges": edges_1b if max_order >= 2 else [],
-            "triangles": triangles_1b if max_order >= 3 else [],
-            "quads": quads_1b if max_order >= 4 else [],
-            "quints": quints_1b if max_order >= 5 else [],
+            "edges": edges_1b,
+            "triangles": triangles_1b,
+            "quads": quads_1b,
+            "quints": quints_1b,
             "sexts": [],
             "septs": [],
         }
 
     @staticmethod
     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
-        all_possible = {}
-
-        if max_order >= 2:
-            all_possible["edges"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 2)]
-        else:
-            all_possible["edges"] = []
-
-        if max_order >= 3:
-            all_possible["triangles"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 3)]
-        else:
-            all_possible["triangles"] = []
-
-        if max_order >= 4:
-            all_possible["quads"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 4)]
-        else:
-            all_possible["quads"] = []
-
-        if max_order >= 5:
-            all_possible["quints"] = [list(edge) for edge in combinations(range(1, n_nodes + 1), 5)]
-        else:
-            all_possible["quints"] = []
-        all_possible["sexts"] = []
-        all_possible["septs"] = []
-
-        return all_possible
+        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
 
     @staticmethod
-    def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
-        n_producers = max(1, n_nodes // 3)
-        n_primary = max(1, n_nodes // 3)
-        n_secondary = max(1, n_nodes - n_producers - n_primary)
-
-        params = HypergraphModel.EcologicalHypergraphParams(
-            n_species=n_nodes,
-            n_producers=n_producers,
-            n_primary_consumers=n_primary,
-            n_secondary_consumers=n_secondary,
-            n_steps=max(10, n_samples),
-        )
+    def generate_training_data(
+        n_nodes: int,
+        edge_config: dict,
+        n_samples: int = 11,
+        noise: float = 0.0,
+        hypergraph_file: str | None = None,
+    ):
+        inferred_n_nodes = HypergraphModel._edge_config_n_nodes(edge_config)
+        if hypergraph_file is not None:
+            params = HypergraphModel._params_from_hypergraph_file(n_steps=max(10, n_samples), hypergraph_file=hypergraph_file)
+        else:
+            n_species = inferred_n_nodes or n_nodes
+            n_producers = max(1, n_species // 3)
+            n_primary = max(1, n_species // 3)
+            n_secondary = max(1, n_species - n_producers - n_primary)
+            params = HypergraphModel.EcologicalHypergraphParams(
+                n_species=n_species,
+                n_producers=n_producers,
+                n_primary_consumers=n_primary,
+                n_secondary_consumers=n_secondary,
+                n_steps=max(10, n_samples),
+                designed_hypergraph_file=hypergraph_file,
+            )
 
         result = HypergraphModel._simulate(params)
         HypergraphModel._cached_params = params
@@ -603,7 +585,8 @@ class HypergraphModel:
 
     @staticmethod
     def get_default_params() -> dict:
+        designed = HypergraphModel._load_designed_hyperedges(HypergraphModel._preset_hypergraph_file())
         return {
-            "n_nodes": 9,
-            "max_order": 5,
+            "n_nodes": designed["n_nodes"],
+            "max_order": designed["max_order"],
         }

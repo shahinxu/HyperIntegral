@@ -14,16 +14,24 @@ RESULTS_ROOT=${9:-results/kernel}
 
 echo "======================================="
 echo "Running Kernel"
-echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, results_root=${RESULTS_ROOT}"
+if [ "${SCENE}" = "rossler" ]; then
+  echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, max_order=${MAX_ORDER}, n_nodes=${N_NODES}, results_root=${RESULTS_ROOT}"
+else
+  echo "scene=${SCENE}, n_samples=${N_SAMPLES}, noise=${NOISE}, gpu_id=${GPU_ID}, n_epochs=${N_EPOCHS}, lr=${LR}, results_root=${RESULTS_ROOT}"
+fi
 echo "======================================="
 
-python -m models.kernel.run \
+CMD=(python -m models.kernel.run \
   --scene "${SCENE}" \
   --n_samples "${N_SAMPLES}" \
   --noise "${NOISE}" \
   --gpu_id "${GPU_ID}" \
   --n_epochs "${N_EPOCHS}" \
   --lr "${LR}" \
-  --max_order "${MAX_ORDER}" \
-  --n_nodes "${N_NODES}" \
-  --results_root "${RESULTS_ROOT}"
+  --results_root "${RESULTS_ROOT}")
+
+if [ "${SCENE}" = "rossler" ]; then
+  CMD+=(--max_order "${MAX_ORDER}" --n_nodes "${N_NODES}")
+fi
+
+"${CMD[@]}"
