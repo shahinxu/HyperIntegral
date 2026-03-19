@@ -427,18 +427,6 @@ def evaluate_edges_triangles(
     y_true_6, y_score_6 = get_labels_and_scores(all_6edges, true_6edges, sext_scores)
     y_true_7, y_score_7 = get_labels_and_scores(all_7edges, true_7edges, sept_scores)
 
-    if results_dir is not None:
-        pred_2 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_2edges) if edge_probs[idx] >= 0.5)
-        pred_3 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_3edges) if triangle_probs[idx] >= 0.5)
-        pred_4 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_4edges) if quad_probs[idx] >= 0.5)
-        pred_5 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_5edges) if quint_probs[idx] >= 0.5)
-        pred_6 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_6edges) if sext_probs[idx] >= 0.5)
-        pred_7 = set(tuple(sorted(edge)) for idx, edge in enumerate(all_7edges) if sept_probs[idx] >= 0.5)
-        prefix = f'predicted'
-        if epoch is not None:
-            prefix = f'predicted_epoch{epoch}'
-        _save_true_hyperedge_figures(results_dir, N, pred_2, pred_3, pred_4, pred_5, pred_6, pred_7, name_prefix=prefix)
-
     return y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7
 
 def compute_auc(y_true, y_score):

@@ -59,6 +59,26 @@ def extract_results_dir(stdout: str):
     return None
 
 
+def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    output_lines: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        output_lines.append(line)
+        print(line, end="", flush=True)
+
+    return proc.wait(), "".join(output_lines)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scene", required=True, choices=sorted(SCENE_TO_SCRIPT.keys()))
@@ -84,7 +104,7 @@ def main():
 
     script = SCENE_TO_SCRIPT[args.scene]
     script_path = HYPERPINN_ROOT / script
-    cmd = [sys.executable, str(script_path), "--M", str(args.n_samples), "--gpu_id", str(args.gpu_id), "--noise", str(args.noise)]
+    cmd = [sys.executable, "-u", str(script_path), "--M", str(args.n_samples), "--gpu_id", str(args.gpu_id), "--noise", str(args.noise)]
     if args.scene not in FILE_DRIVEN_SCENES and args.n_nodes is not None:
         cmd.extend(["--N", str(args.n_nodes)])
     if args.scene not in FILE_DRIVEN_SCENES and effective_max_order is not None:
@@ -93,14 +113,13 @@ def main():
     # Run from project root so HyperPINN writes results into top-level results_* directories.
     env = os.environ.copy()
     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
+    env["PYTHONUNBUFFERED"] = "1"
 
-    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, env=env)
-    print(proc.stdout)
-    if proc.returncode != 0:
-        print(proc.stderr, file=sys.stderr)
-        raise SystemExit(proc.returncode)
+    returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+    if returncode != 0:
+        raise SystemExit(returncode)
 
-    results_dir = extract_results_dir(proc.stdout)
+    results_dir = extract_results_dir(combined_output)
     if results_dir is None:
         raise RuntimeError("Could not infer results directory from baseline output")
 
