@@ -25,18 +25,6 @@ SCENE_TO_SCRIPT = {
 FILE_DRIVEN_SCENES = {"ecological", "neuronal", "social"}
 
 
-def _safe_max_order(n_nodes: int | None, requested_max_order: int | None) -> int | None:
-    if n_nodes is None or requested_max_order is None:
-        return requested_max_order
-
-    # HyperPINN enumerates all k-combinations; large N with high k is intractable.
-    if n_nodes >= 40:
-        return min(requested_max_order, 3)
-    if n_nodes >= 25:
-        return min(requested_max_order, 4)
-    return requested_max_order
-
-
 def parse_auc_file(path: Path):
     auc_scores = {}
     if not path.exists():
@@ -95,12 +83,10 @@ def main():
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
 
-    effective_max_order = _safe_max_order(args.n_nodes, args.max_order)
-    if args.scene not in FILE_DRIVEN_SCENES and args.max_order is not None and effective_max_order is not None and effective_max_order < args.max_order:
-        print(
-            f"[hyperpinn] max_order={args.max_order} is unsafe for n_nodes={args.n_nodes}; "
-            f"using max_order={effective_max_order} to avoid OOM."
-        )
+    HypergraphModel, _ = get_scene_model(args.scene)
+    defaults = HypergraphModel.get_default_params()
+
+    effective_max_order = defaults["max_order"] if args.max_order is None else args.max_order
 
     script = SCENE_TO_SCRIPT[args.scene]
     script_path = HYPERPINN_ROOT / script
@@ -110,7 +96,6 @@ def main():
     if args.scene not in FILE_DRIVEN_SCENES and effective_max_order is not None:
         cmd.extend(["--max_order", str(effective_max_order)])
 
-    # Run from project root so HyperPINN writes results into top-level results_* directories.
     env = os.environ.copy()
     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
     env["PYTHONUNBUFFERED"] = "1"
@@ -128,9 +113,6 @@ def main():
         results_path = PROJECT_ROOT / results_path
         if not results_path.exists():
             results_path = BASELINE_ROOT / results_dir
-
-    HypergraphModel, _ = get_scene_model(args.scene)
-    defaults = HypergraphModel.get_default_params()
 
     auc_scores = parse_auc_file(results_path / "auc_scores.txt")
     write_standard_summary(

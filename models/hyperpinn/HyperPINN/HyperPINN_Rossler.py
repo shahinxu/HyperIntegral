@@ -1,117 +1,32 @@
-from HyperPINNTopology import HyperPINNTopology
-import torch
-from torch import optim as optim
-import numpy as np
-from scipy.integrate import solve_ivp
-import matplotlib.pyplot as plt
-from itertools import combinations
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
+import torch
 import argparse
+from sklearn.metrics import roc_curve, auc
+from torch import optim as optim
 
-def roessler_hoi(t, x, EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList):
-    m1 = len(x)
-    N = m1 // 3
-    xold = x[0:N]
-    yold = x[N:2*N]
-    zold = x[2*N:3*N]
-    ar, br, cr = 0.2, 0.2, 0.7
-    k, kD = 0.4, 0.3
+from HyperPINNTopology import HyperPINNTopology
 
-    coup_rete = np.zeros(N)
-    coup_simplicial = np.zeros(N)
-    coup_quads = np.zeros(N)
-    coup_quints = np.zeros(N)
-    coup_sexts = np.zeros(N)
-    coup_septs = np.zeros(N)
-    
-    for ii in range(len(EdgeList)):
-        i1 = EdgeList[ii, 0] - 1
-        i2 = EdgeList[ii, 1] - 1
-        coup_rete[i1] += xold[i2] - xold[i1]
-        coup_rete[i2] += xold[i1] - xold[i2]
-    
-    mtrianglelist, _ = TriangleList.shape
-    for ii in range(mtrianglelist):
-        i1 = TriangleList[ii, 0] - 1
-        i2 = TriangleList[ii, 1] - 1
-        i3 = TriangleList[ii, 2] - 1
-        coup_simplicial[i1] += xold[i2]**2 * xold[i3] - xold[i1]**3 + xold[i2] * xold[i3]**2 - xold[i1]**3
-        coup_simplicial[i2] += xold[i1]**2 * xold[i3] - xold[i2]**3 + xold[i1] * xold[i3]**2 - xold[i2]**3
-        coup_simplicial[i3] += xold[i1]**2 * xold[i2] - xold[i3]**3 + xold[i1] * xold[i2]**2 - xold[i3]**3
-    
-    mquadlist, nquadlist = QuadList.shape
-    for ii in range(mquadlist):
-        i1 = QuadList[ii, 0] - 1
-        i2 = QuadList[ii, 1] - 1
-        i3 = QuadList[ii, 2] - 1
-        i4 = QuadList[ii, 3] - 1
-        coup_quads[i1] += xold[i2]**2 * xold[i3] * xold[i4] - xold[i1]**3
-        coup_quads[i2] += xold[i1]**2 * xold[i3] * xold[i4] - xold[i2]**3
-        coup_quads[i3] += xold[i1]**2 * xold[i2] * xold[i4] - xold[i3]**3
-        coup_quads[i4] += xold[i1]**2 * xold[i2] * xold[i3] - xold[i4]**3
-    
-    mquintlist, nquintlist = QuintList.shape
-    for ii in range(mquintlist):
-        i1 = QuintList[ii, 0] - 1
-        i2 = QuintList[ii, 1] - 1
-        i3 = QuintList[ii, 2] - 1
-        i4 = QuintList[ii, 3] - 1
-        i5 = QuintList[ii, 4] - 1
-        coup_quints[i1] += yold[i2]**2 * yold[i3] * yold[i4] * yold[i5] - yold[i1]**3
-        coup_quints[i2] += yold[i1]**2 * yold[i3] * yold[i4] * yold[i5] - yold[i2]**3
-        coup_quints[i3] += yold[i1]**2 * yold[i2] * yold[i4] * yold[i5] - yold[i3]**3
-        coup_quints[i4] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i5] - yold[i4]**3
-        coup_quints[i5] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] - yold[i5]**3
-    
-    msextlist, nsextlist = SextList.shape
-    for ii in range(msextlist):
-        i1 = SextList[ii, 0] - 1
-        i2 = SextList[ii, 1] - 1
-        i3 = SextList[ii, 2] - 1
-        i4 = SextList[ii, 3] - 1
-        i5 = SextList[ii, 4] - 1
-        i6 = SextList[ii, 5] - 1
-        coup_sexts[i1] += yold[i2]**2 * yold[i3] * yold[i4] * yold[i5] * yold[i6] - yold[i1]**3
-        coup_sexts[i2] += yold[i1]**2 * yold[i3] * yold[i4] * yold[i5] * yold[i6] - yold[i2]**3
-        coup_sexts[i3] += yold[i1]**2 * yold[i2] * yold[i4] * yold[i5] * yold[i6] - yold[i3]**3
-        coup_sexts[i4] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i5] * yold[i6] - yold[i4]**3
-        coup_sexts[i5] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] * yold[i6] - yold[i5]**3
-        coup_sexts[i6] += yold[i1]**2 * yold[i2] * yold[i3] * yold[i4] * yold[i5] - yold[i6]**3
-    
-    mseptlist, nseptlist = SeptList.shape
-    for ii in range(mseptlist):
-        i1 = SeptList[ii, 0] - 1
-        i2 = SeptList[ii, 1] - 1
-        i3 = SeptList[ii, 2] - 1
-        i4 = SeptList[ii, 3] - 1
-        i5 = SeptList[ii, 4] - 1
-        i6 = SeptList[ii, 5] - 1
-        i7 = SeptList[ii, 6] - 1
-        coup_septs[i1] += zold[i2]**2 * zold[i3] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i1]**3
-        coup_septs[i2] += zold[i1]**2 * zold[i3] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i2]**3
-        coup_septs[i3] += zold[i1]**2 * zold[i2] * zold[i4] * zold[i5] * zold[i6] * zold[i7] - zold[i3]**3
-        coup_septs[i4] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i5] * zold[i6] * zold[i7] - zold[i4]**3
-        coup_septs[i5] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i6] * zold[i7] - zold[i5]**3
-        coup_septs[i6] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i5] * zold[i7] - zold[i6]**3
-        coup_septs[i7] += zold[i1]**2 * zold[i2] * zold[i3] * zold[i4] * zold[i5] * zold[i6] - zold[i7]**3
-    
-    dxdt1 = -yold - zold + k * coup_rete + kD * coup_simplicial + kD * coup_quads
-    dydt1 = xold + ar * yold + kD * coup_quints + kD * coup_sexts
-    dzdt1 = br + zold * (xold - cr) + kD * coup_septs
-    dxdt = np.concatenate((dxdt1, dydt1, dzdt1))
-    return dxdt
+PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# Parse command-line arguments
+from lib_rossler_oscillator.hypergraph import HypergraphModel as RosslerHypergraphModel
+
+defaults = RosslerHypergraphModel.get_default_params()
+
 parser = argparse.ArgumentParser(description='Run Rossler Oscillators with HyperPINN')
-parser.add_argument('--M', type=int, default=300)
+parser.add_argument('--M', type=int, default=150)
 parser.add_argument('--tmax', type=float, default=20)
-parser.add_argument('--N', type=int, default=8)
-parser.add_argument('--max_order', type=int, default=7)
-parser.add_argument('--gpu_id', type=int, default=4)
+parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+parser.add_argument('--max_order', type=int, default=defaults['max_order'])
+parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--noise', type=float, default=0.0)
 args = parser.parse_args()
 
@@ -120,108 +35,36 @@ max_order = args.max_order
 gpu_id = args.gpu_id
 noise = args.noise
 
-def get_hyperedge_config(N):
-    configs = {
-        8: {
-            'edges': [[1, 2],[2, 3],[3, 4],[5, 6],[6, 7],[7, 8]],
-            'triangles': [[1, 2, 3],[2, 4, 5],[5, 6, 7],[6, 7, 8]],
-            'quads': [[1, 2, 3, 4]],
-            'quints': [[4, 5, 6, 7, 8]],
-            'sexts': [[1, 2, 3, 4, 5, 6]],
-            'septs': [[3, 2, 4, 5, 6, 7, 8]]
-        },
-        10: {
-            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [8, 9]],
-            'triangles': [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
-            'quads': [[1, 2, 3, 4], [7, 8, 9, 10]],
-            'quints': [[2, 3, 4, 5, 6]],
-            'sexts': [[3, 4, 5, 6, 7, 8]],
-            'septs': [[1, 2, 4, 6, 7, 9, 10]]
-        },
-        12: {
-            'edges': [[1, 2], [2, 3], [4, 5], [6, 7], [9, 10], [11, 12]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [9, 10, 11]],
-            'quads': [[1, 2, 3, 4], [9, 10, 11, 12]],
-            'quints': [[3, 4, 5, 6, 7]],
-            'sexts': [[5, 6, 7, 8, 9, 10]],
-            'septs': [[1, 3, 5, 7, 9, 11, 12]]
-        },
-        14: {
-            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [7, 8], [10, 11], [12, 13]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
-            'quads': [[1, 2, 3, 4], [11, 12, 13, 14]],
-            'quints': [[4, 5, 6, 7, 8]],
-            'sexts': [[7, 8, 9, 10, 11, 12]],
-            'septs': [[1, 3, 5, 8, 10, 12, 14]]
-        },
-        16: {
-            'edges': [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [9, 10], [11, 12], [13, 14]],
-            'triangles': [[1, 2, 3], [5, 6, 7], [10, 11, 12]],
-            'quads': [[1, 2, 3, 4], [13, 14, 15, 16]],
-            'quints': [[5, 6, 7, 8, 9]],
-            'sexts': [[9, 10, 11, 12, 13, 14]],
-            'septs': [[1, 4, 7, 10, 13, 15, 16]]
-        }
-    }
-    
-    if N not in configs:
-        raise ValueError(f"N must be one of {list(configs.keys())}, got {N}")
-    
-    config = configs[N]
-    return (
-        np.array(config['edges']),
-        np.array(config['triangles']),
-        np.array(config['quads']),
-        np.array(config['quints']),
-        np.array(config['sexts']),
-        np.array(config['septs'])
-    )
+edge_config = RosslerHypergraphModel.get_hyperedge_config(N, max_order)
+EdgeList = np.array(edge_config.get('edges', [])) if edge_config.get('edges') else np.empty((0, 2), dtype=int)
+TriangleList_full = np.array(edge_config.get('triangles', [])) if edge_config.get('triangles') else np.empty((0, 3), dtype=int)
+QuadList_full = np.array(edge_config.get('quads', [])) if edge_config.get('quads') else np.empty((0, 4), dtype=int)
+QuintList_full = np.array(edge_config.get('quints', [])) if edge_config.get('quints') else np.empty((0, 5), dtype=int)
 
-EdgeList, TriangleList_full, QuadList_full, QuintList_full, SextList_full, SeptList_full = get_hyperedge_config(N)
-
-# Automatically adjust ground truth based on max_order
 TriangleList = TriangleList_full if max_order >= 3 else np.array([]).reshape(0, 3)
 QuadList = QuadList_full if max_order >= 4 else np.array([]).reshape(0, 4)
 QuintList = QuintList_full if max_order >= 5 else np.array([]).reshape(0, 5)
-SextList = SextList_full if max_order >= 6 else np.array([]).reshape(0, 6)
-SeptList = SeptList_full if max_order >= 7 else np.array([]).reshape(0, 7)
 
-all_2edges = list(combinations(range(1, N+1), 2))
-all_3edges = list(combinations(range(1, N+1), 3))
-all_4edges = list(combinations(range(1, N+1), 4))
-all_5edges = list(combinations(range(1, N+1), 5))
-all_6edges = list(combinations(range(1, N+1), 6))
-all_7edges = list(combinations(range(1, N+1), 7))
+all_possible = RosslerHypergraphModel.generate_all_possible_hyperedges(N, max_order)
+all_2edges = all_possible["edges"]
+all_3edges = all_possible["triangles"]
+all_4edges = all_possible["quads"]
+all_5edges = all_possible["quints"]
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
 true_4edges = set(tuple(sorted(quad)) for quad in QuadList)
 true_5edges = set(tuple(sorted(quint)) for quint in QuintList)
-true_6edges = set(tuple(sorted(sext)) for sext in SextList)
-true_7edges = set(tuple(sorted(sept)) for sept in SeptList)
 
 M = args.M
 tmax = args.tmax
-dt = tmax / M
-t_eval = np.linspace(0, tmax, M+1)
-t_data = torch.linspace(0, tmax, M+1, requires_grad=True).unsqueeze(1)
-
-np.random.seed(42)
-x0 = np.random.uniform(-1, 1, size=(3 * N,))
-sol = solve_ivp(
-    roessler_hoi,
-    (0, tmax),
-    x0,
-    t_eval=t_eval,
-    args=(EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList),
-)
-X = sol.y.T
-nt = len(t_eval)
-dxdt = np.array(
-    [
-        roessler_hoi(t, sol.y[:, i], EdgeList, TriangleList, QuadList, QuintList, SextList, SeptList)
-        for i, t in enumerate(sol.t)
-    ]
+t_eval, X = RosslerHypergraphModel.generate_training_data(
+    N,
+    edge_config,
+    n_samples=M + 1,
+    noise=0.0,
+    tmax=tmax,
+    flatten=True,
 )
 
 if noise > 0:
@@ -231,7 +74,8 @@ if noise > 0:
 else:
     X_noisy = X
 
-x_data = torch.tensor(X_noisy, dtype=torch.float64)
+t_data = torch.tensor(t_eval, dtype=torch.float32, requires_grad=True).unsqueeze(1)
+x_data = torch.tensor(X_noisy, dtype=torch.float32)
 architectures = [
     ("ResNet", True, False, False),
     ("Attention", False, True, False),
@@ -275,19 +119,15 @@ def _save_true_hyperedge_figures(
     true_2edges, 
     true_3edges, 
     true_4edges, 
-    true_5edges, 
-    true_6edges, 
-    true_7edges,
+    true_5edges,
     name_prefix: str = "true"
 ):
-    orders = [2, 3, 4, 5, 6, 7]
+    orders = [2, 3, 4, 5]
     true_lists = [
         sorted(true_2edges),
         sorted(true_3edges),
         sorted(true_4edges),
         sorted(true_5edges),
-        sorted(true_6edges),
-        sorted(true_7edges)
     ]
 
     G = nx.Graph()
@@ -296,7 +136,7 @@ def _save_true_hyperedge_figures(
     pos = nx.circular_layout(G)
     cmap = plt.get_cmap('tab20')
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     axes = axes.flatten()
     for ax, order, true_list in zip(axes, orders, true_lists):
         xs = [pos[n][0] for n in G.nodes()]
@@ -328,7 +168,7 @@ def _save_true_hyperedge_figures(
     fig.savefig(os.path.join(results_dir, fname), bbox_inches='tight', dpi=200)
     plt.close(fig)
 
-_save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges, true_6edges, true_7edges)
+_save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, true_4edges, true_5edges)
 
 if gpu_id is not None and gpu_id >= 0 and torch.cuda.is_available():
     device = torch.device(f'cuda:{gpu_id}')
@@ -359,10 +199,6 @@ model.lambda_l1_quads = 0.04
 model.lambda_l0_quads = 0.015
 model.lambda_l1_quints = 0.03
 model.lambda_l0_quints = 0.01
-model.lambda_l1_sexts = 0.025
-model.lambda_l0_sexts = 0.008
-model.lambda_l1_septs = 0.02
-model.lambda_l0_septs = 0.005
 optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
 losses = []
 sparsity_stats = []
@@ -394,40 +230,28 @@ def evaluate_edges_triangles(
     all_4edges, 
     true_4edges, 
     all_5edges,
-    true_5edges, 
-    all_6edges, 
-    true_6edges, 
-    all_7edges, 
-    true_7edges,
+    true_5edges,
     results_dir=None,
     epoch=None,
 ):
     with torch.no_grad():
-        edge_probs, triangle_probs, quad_probs, quint_probs, sext_probs, sept_probs = model.get_sparse_weights(use_concrete=False, hard=False)
+        edge_probs, triangle_probs, quad_probs, quint_probs, _, _ = model.get_sparse_weights(use_concrete=False, hard=False)
         edge_probs = edge_probs.cpu().numpy() if edge_probs is not None else np.zeros(len(all_2edges))
         triangle_probs = triangle_probs.cpu().numpy() if triangle_probs is not None else np.zeros(len(all_3edges))
         quad_probs = quad_probs.cpu().numpy() if quad_probs is not None else np.zeros(len(all_4edges))
         quint_probs = quint_probs.cpu().numpy() if quint_probs is not None else np.zeros(len(all_5edges))
-        sext_probs = sext_probs.cpu().numpy() if sext_probs is not None else np.zeros(len(all_6edges))
-        sept_probs = sept_probs.cpu().numpy() if sept_probs is not None else np.zeros(len(all_7edges))
 
-    # scores used for ROC/AUC (if values are hard 0/1 this still works)
     edge_scores = [abs(edge_probs[idx]) for idx, _ in enumerate(all_2edges)]
     triangle_scores = [abs(triangle_probs[idx]) for idx, _ in enumerate(all_3edges)]
     quad_scores = [abs(quad_probs[idx]) for idx, _ in enumerate(all_4edges)]
     quint_scores = [abs(quint_probs[idx]) for idx, _ in enumerate(all_5edges)]
-    sext_scores = [abs(sext_probs[idx]) for idx, _ in enumerate(all_6edges)]
-    sept_scores = [abs(sept_probs[idx]) for idx, _ in enumerate(all_7edges)]
 
-    # build ground-truth label / score arrays
     y_true_2, y_score_2 = get_labels_and_scores(all_2edges, true_2edges, edge_scores)
     y_true_3, y_score_3 = get_labels_and_scores(all_3edges, true_3edges, triangle_scores)
     y_true_4, y_score_4 = get_labels_and_scores(all_4edges, true_4edges, quad_scores)
     y_true_5, y_score_5 = get_labels_and_scores(all_5edges, true_5edges, quint_scores)
-    y_true_6, y_score_6 = get_labels_and_scores(all_6edges, true_6edges, sext_scores)
-    y_true_7, y_score_7 = get_labels_and_scores(all_7edges, true_7edges, sept_scores)
 
-    return y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7
+    return y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5
 
 def compute_auc(y_true, y_score):
     fpr, tpr, _ = roc_curve(y_true, y_score)
@@ -487,9 +311,7 @@ for epoch in range(epochs):
             f"  L1 edges: {sparsity_info['l1_edges']:.2f}," 
             f"  L1 triangles: {sparsity_info['l1_triangles']:.2f},"
             f"  L1 quads: {sparsity_info['l1_quads']:.2f},"
-            f"  L1 quints: {sparsity_info['l1_quints']:.2f},"
-            f"  L1 sexts: {sparsity_info['l1_sexts']:.2f},"
-            f"  L1 septs: {sparsity_info['l1_septs']:.2f}"
+            f"  L1 quints: {sparsity_info['l1_quints']:.2f}"
         )
         with torch.no_grad():
             X_pred = model.forward(t_data).cpu().numpy()
@@ -537,19 +359,16 @@ for epoch in range(epochs):
         plt.savefig(os.path.join(results_dir, f"nn_prediction_epoch{epoch}.png"), dpi=150, bbox_inches='tight')
         plt.close(fig)
         
-        y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7 = \
+        y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5 = \
             evaluate_edges_triangles(
                 model, t_data,
                 all_2edges, true_2edges,
                 all_3edges, true_3edges,
                 all_4edges, true_4edges,
                 all_5edges, true_5edges,
-                all_6edges, true_6edges,
-                all_7edges, true_7edges,
                 results_dir=results_dir,
                 epoch=epoch,
             )
-        # Only compute and display AUC for orders <= max_order
         auc_str = ""
         if max_order >= 2:
             auc_2 = compute_auc(y_true_2, y_score_2)
@@ -563,23 +382,15 @@ for epoch in range(epochs):
         if max_order >= 5:
             auc_5 = compute_auc(y_true_5, y_score_5)
             auc_str += f", AUC (5-edges): {auc_5:.4f}"
-        if max_order >= 6:
-            auc_6 = compute_auc(y_true_6, y_score_6)
-            auc_str += f", AUC (6-edges): {auc_6:.4f}"
-        if max_order >= 7:
-            auc_7 = compute_auc(y_true_7, y_score_7)
-            auc_str += f", AUC (7-edges): {auc_7:.4f}"
         print(auc_str)
 
-y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5, y_true_6, y_score_6, y_true_7, y_score_7 = \
+y_true_2, y_score_2, y_true_3, y_score_3, y_true_4, y_score_4, y_true_5, y_score_5 = \
     evaluate_edges_triangles(
         model, t_data,
         all_2edges, true_2edges,
         all_3edges, true_3edges,
         all_4edges, true_4edges,
         all_5edges, true_5edges,
-        all_6edges, true_6edges,
-        all_7edges, true_7edges,
         results_dir=results_dir,
         epoch='final',
     )
@@ -603,14 +414,6 @@ if max_order >= 5:
     plot_roc(y_true_5, y_score_5, 'Fifth-order')
     y_true_list.append(y_true_5)
     y_score_list.append(y_score_5)
-if max_order >= 6:
-    plot_roc(y_true_6, y_score_6, 'Sixth-order')
-    y_true_list.append(y_true_6)
-    y_score_list.append(y_score_6)
-if max_order >= 7:
-    plot_roc(y_true_7, y_score_7, 'Seventh-order')
-    y_true_list.append(y_true_7)
-    y_score_list.append(y_score_7)
 
 if len(y_true_list) > 0:
     y_true_total = np.concatenate(y_true_list)
@@ -622,4 +425,4 @@ plt.title('ROC Curves for Identified Hypergraphs',fontsize=17)
 plt.legend(fontsize=14, loc="lower right")
 plt.xticks(fontsize=12)
 plt.yticks(fontsize=12)
-plt.savefig(os.path.join(results_dir, 'roc_curves_7_order.png'), bbox_inches='tight')
+plt.savefig(os.path.join(results_dir, f'roc_curves_{max_order}_order.png'), bbox_inches='tight')
