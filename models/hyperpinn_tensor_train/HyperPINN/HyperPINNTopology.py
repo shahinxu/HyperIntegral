@@ -304,8 +304,8 @@ class HyperPINNTopology(nn.Module):
         a2_ex = a2[:, None, :] - core1_i * x_sq_i
         n_a_ex = n_a[None, None, :] - core1_i
 
-        b1_ex = b1[:, None, :, :] - core2_i * x_i[:, :, None, None]
-        b2_ex = b2[:, None, :, :] - core2_i * x_sq_i[:, :, None, None]
+        b1_ex = b1[:, None, :, :] - core2_i * x_old[:, :, None, None]
+        b2_ex = b2[:, None, :, :] - core2_i * x_sq[:, :, None, None]
         n_b_ex = n_b[None, None, :, :] - core2_i
 
         c1_ex = c1[:, None, :] - core3_i * x_i
@@ -332,8 +332,8 @@ class HyperPINNTopology(nn.Module):
         inner_312 = a1_ex[:, :, :, None] * c2_ex[:, :, None, :] - d_ac_ex - x_cu_factor * (n_a_ex[:, :, :, None] * n_c_ex[:, :, None, :] - e_ac_ex)
         inner_321 = a1_ex[:, :, :, None] * b2_ex - d_ab_ex - x_cu_factor * (n_a_ex[:, :, :, None] * n_b_ex - e_ab_ex)
 
-        term_123 = torch.einsum("nia,xnab->xn", core1_i.expand(batch_size, -1, -1), inner_123)
-        term_132 = torch.einsum("nia,xnab->xn", core1_i.expand(batch_size, -1, -1), inner_132)
+        term_123 = torch.einsum("xna,xnab->xn", core1_i.expand(batch_size, -1, -1), inner_123)
+        term_132 = torch.einsum("xna,xnab->xn", core1_i.expand(batch_size, -1, -1), inner_132)
         term_213 = torch.sum(core2_i.expand(batch_size, -1, -1, -1) * inner_213, dim=(2, 3))
         term_231 = torch.einsum("xnb,xnab->xn", core3_i.expand(batch_size, -1, -1), inner_231)
         term_312 = torch.sum(core2_i.expand(batch_size, -1, -1, -1) * inner_312, dim=(2, 3))
