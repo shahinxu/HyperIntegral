@@ -70,15 +70,29 @@ def build_orderwise_support(n_nodes: int, max_order: int) -> dict:
         3: "triangles",
         4: "quads",
         5: "quints",
-        6: "sexts",
-        7: "septs",
     }
     support = {k: [] for k in order_to_key.values()}
-    max_order = min(max_order, 7)
+    max_order = min(max_order, 5)
     for order in range(2, max_order + 1):
         key = order_to_key[order]
         support[key] = [list(edge) for edge in combinations(range(1, n_nodes + 1), order)]
     return support
+
+
+def infer_n_nodes_from_edge_config(edge_config: dict) -> int:
+    max_node = 0
+    for key in ['edges', 'triangles', 'quads', 'quints']:
+        for edge in edge_config.get(key, []):
+            if edge:
+                max_node = max(max_node, *(int(v) for v in edge))
+    return max_node
+
+
+def infer_max_order_from_edge_config(edge_config: dict) -> int:
+    for order, key in ((5, 'quints'), (4, 'quads'), (3, 'triangles'), (2, 'edges')):
+        if edge_config.get(key):
+            return order
+    return 0
 
 
 def compute_auc_scores(A_learned, edge_config, N, max_order, orderwise_support=None):
@@ -93,8 +107,8 @@ def compute_auc_scores(A_learned, edge_config, N, max_order, orderwise_support=N
     roc_data = {}
     A_idx = 0  # Index in A
     
-    order_names = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
-    order_labels = ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']
+    order_names = ['edges', 'triangles', 'quads', 'quints']
+    order_labels = ['2-edges', '3-edges', '4-edges', '5-edges']
     
     for order_idx, (order_name, order_label) in enumerate(zip(order_names, order_labels)):
         order_num = order_idx + 2
@@ -143,6 +157,84 @@ def compute_auc_scores(A_learned, edge_config, N, max_order, orderwise_support=N
     
     return auc_scores, roc_data
 
+
+def save_roc_curve_data(A_learned, edge_config, N, max_order, save_dir, orderwise_support=None):
+    if orderwise_support is None:
+        orderwise_support = build_orderwise_support(N, max_order)
+
+    roc_dir = os.path.join(save_dir, "roc_data")
+    os.makedirs(roc_dir, exist_ok=True)
+
+    A_flat = A_learned.flatten()
+    A_idx = 0
+    manifest = []
+
+    order_names = ['edges', 'triangles', 'quads', 'quints']
+    order_labels = ['2-edges', '3-edges', '4-edges', '5-edges']
+
+    for order_idx, (order_name, order_label) in enumerate(zip(order_names, order_labels)):
+        order_num = order_idx + 2
+        if order_num > max_order:
+            break
+
+        possible_edges = orderwise_support.get(order_name, [])
+        true_edges = edge_config.get(order_name, [])
+        if len(possible_edges) == 0:
+            continue
+
+        y_true = []
+        y_score = []
+        rows = []
+
+        for edge in possible_edges:
+            is_true_edge = any(sorted(edge) == sorted(true_edge) for true_edge in true_edges)
+            score = 1 / (1 + np.exp(-A_flat[A_idx])) if A_idx < len(A_flat) else 0.0
+            y_true.append(1 if is_true_edge else 0)
+            y_score.append(score)
+            rows.append({
+                'edge': '-'.join(str(v) for v in edge),
+                'y_true': int(is_true_edge),
+                'y_score': float(score),
+            })
+            A_idx += 1
+
+        y_true = np.array(y_true)
+        y_score = np.array(y_score)
+
+        csv_path = os.path.join(roc_dir, f"{order_label.replace('-', '_')}_scores.csv")
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            f.write('edge,y_true,y_score\n')
+            for row in rows:
+                f.write(f"{row['edge']},{row['y_true']},{row['y_score']:.12f}\n")
+
+        roc_curve_path = None
+        auc_score = None
+        if len(np.unique(y_true)) > 1:
+            fpr, tpr, thresholds = roc_curve(y_true, y_score)
+            auc_score = auc(fpr, tpr)
+            roc_curve_path = os.path.join(roc_dir, f"{order_label.replace('-', '_')}_roc_curve.csv")
+            with open(roc_curve_path, 'w', encoding='utf-8') as f:
+                f.write('fpr,tpr,threshold\n')
+                for fpr_val, tpr_val, thr_val in zip(fpr, tpr, thresholds):
+                    f.write(f"{float(fpr_val):.12f},{float(tpr_val):.12f},{float(thr_val):.12f}\n")
+
+        manifest.append({
+            'order_label': order_label,
+            'n_support': len(possible_edges),
+            'n_true': int(np.sum(y_true)),
+            'auc': None if auc_score is None else float(auc_score),
+            'score_file': csv_path,
+            'roc_curve_file': roc_curve_path,
+        })
+
+    manifest_path = os.path.join(roc_dir, 'manifest.json')
+    import json
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"ROC source data saved to {roc_dir}")
+    return roc_dir
+
 def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
     plt.figure(figsize=(8, 6))
     colors = {
@@ -150,11 +242,9 @@ def plot_roc_curves(roc_data, auc_scores, save_dir, max_order):
         '3-edges': 'green',
         '4-edges': 'red',
         '5-edges': 'purple',
-        '6-edges': 'orange',
-        '7-edges': 'brown'
     }
     
-    for order_label in ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']:
+    for order_label in ['2-edges', '3-edges', '4-edges', '5-edges']:
         if order_label in roc_data and roc_data[order_label] is not None:
             fpr, tpr = roc_data[order_label]
             auc_val = auc_scores[order_label]
@@ -196,14 +286,12 @@ def train_integral_model(
     print(f"Using device: {device}")
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
     orderwise_support = build_orderwise_support(N, max_order)
-    order_keys = ['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs']
+    order_keys = ['edges', 'triangles', 'quads', 'quints']
     order_sizes = {
         'edges': 2,
         'triangles': 3,
         'quads': 4,
         'quints': 5,
-        'sexts': 6,
-        'septs': 7,
     }
     n_hyperedges = sum(len(orderwise_support.get(key, [])) for key in order_keys)
     print(f"N={N}, max_order={max_order}")
@@ -212,15 +300,11 @@ def train_integral_model(
     print(f"  3-edges: {len(orderwise_support.get('triangles', []))}")
     print(f"  4-edges: {len(orderwise_support.get('quads', []))}")
     print(f"  5-edges: {len(orderwise_support.get('quints', []))}")
-    print(f"  6-edges: {len(orderwise_support.get('sexts', []))}")
-    print(f"  7-edges: {len(orderwise_support.get('septs', []))}")
     print(f"\nTrue hyperedges:")
     print(f"  2-edges: {len(edge_config.get('edges', []))}")
     print(f"  3-edges: {len(edge_config.get('triangles', []))}")
     print(f"  4-edges: {len(edge_config.get('quads', []))}")
     print(f"  5-edges: {len(edge_config.get('quints', []))}")
-    print(f"  6-edges: {len(edge_config.get('sexts', []))}")
-    print(f"  7-edges: {len(edge_config.get('septs', []))}")
     
     print("\nGenerating training data...")
     try:
@@ -443,8 +527,6 @@ def train_integral_model(
     n_triangles = len(orderwise_support.get('triangles', []))
     n_quads = len(orderwise_support.get('quads', []))
     n_quints = len(orderwise_support.get('quints', []))
-    n_sexts = len(orderwise_support.get('sexts', []))
-    n_septs = len(orderwise_support.get('septs', []))
     
     if n_edges > 0:
         A[A_idx:A_idx+n_edges] -= 2.0
@@ -452,7 +534,7 @@ def train_integral_model(
     if n_triangles > 0:
         A[A_idx:A_idx+n_triangles] -= 3.0
         A_idx += n_triangles
-    remaining = n_quads + n_quints + n_sexts + n_septs
+    remaining = n_quads + n_quints
     if remaining > 0:
         A[A_idx:A_idx+remaining] -= 4.0
     
@@ -544,8 +626,8 @@ def train_integral_model(
             A_flat = A_current.flatten()
             A_idx = 0
             
-            for order_name, order_label in zip(['edges', 'triangles', 'quads', 'quints', 'sexts', 'septs'],
-                                               ['2-edges', '3-edges', '4-edges', '5-edges', '6-edges', '7-edges']):
+            for order_name, order_label in zip(['edges', 'triangles', 'quads', 'quints'],
+                                               ['2-edges', '3-edges', '4-edges', '5-edges']):
                 if order_label not in auc_scores:
                     continue
                     
@@ -585,8 +667,9 @@ if __name__ == "__main__":
     HypergraphModel, scene_spec = get_scene_model(args.scene)
     defaults = HypergraphModel.get_default_params()
     if args.scene in {"ecological", "neuronal", "social"}:
-        N = defaults["n_nodes"]
-        max_order = defaults["max_order"]
+        effective_edge_config = HypergraphModel.get_hyperedge_config(defaults["n_nodes"], defaults["max_order"])
+        N = infer_n_nodes_from_edge_config(effective_edge_config) or defaults["n_nodes"]
+        max_order = infer_max_order_from_edge_config(effective_edge_config) or defaults["max_order"]
     else:
         N = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
         max_order = args.max_order if args.max_order is not None else defaults["max_order"]
@@ -634,6 +717,14 @@ if __name__ == "__main__":
     
     print("\nPlotting ROC curves...")
     plot_roc_curves(roc_data, auc_scores, save_dir, max_order)
+    save_roc_curve_data(
+        A_learned,
+        edge_config,
+        N,
+        max_order,
+        save_dir,
+        build_orderwise_support(N, max_order),
+    )
 
     write_standard_summary(
         save_dir=save_dir,
