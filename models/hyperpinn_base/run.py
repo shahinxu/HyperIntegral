@@ -78,14 +78,10 @@ def main():
     parser.add_argument("--results_root", type=str, default="results/hyperpinn")
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
-    parser.add_argument("--itc_rank", type=int, default=16)
-    parser.add_argument("--observed_fraction", type=float, default=0.5)
-    parser.add_argument("--completion_neg_ratio", type=float, default=1.0)
-    parser.add_argument("--completion_seed", type=int, default=42)
     args = parser.parse_args()
 
     if args.scene != "rossler":
-        raise ValueError("hyperpinn_ITC currently supports only the rossler scene.")
+        raise ValueError("hyperpinn_base currently supports only the rossler scene.")
 
     HypergraphModel, _ = get_scene_model(args.scene)
     defaults = HypergraphModel.get_default_params()
@@ -95,29 +91,7 @@ def main():
     script = SCENE_TO_SCRIPT[args.scene]
     script_path = HYPERPINN_ROOT / script
     python_executable = args.python or sys.executable
-    cmd = [
-        python_executable,
-        "-u",
-        str(script_path),
-        "--M",
-        str(args.n_samples),
-        "--gpu_id",
-        str(args.gpu_id),
-        "--noise",
-        str(args.noise),
-        "--epochs",
-        str(args.n_epochs),
-        "--lr",
-        str(args.lr),
-        "--itc_rank",
-        str(args.itc_rank),
-        "--observed_fraction",
-        str(args.observed_fraction),
-        "--completion_neg_ratio",
-        str(args.completion_neg_ratio),
-        "--completion_seed",
-        str(args.completion_seed),
-    ]
+    cmd = [python_executable, "-u", str(script_path), "--M", str(args.n_samples), "--gpu_id", str(args.gpu_id), "--noise", str(args.noise)]
     if args.n_nodes is not None:
         cmd.extend(["--N", str(args.n_nodes)])
     if effective_max_order is not None:
@@ -144,7 +118,7 @@ def main():
     auc_scores = parse_auc_file(results_path / "auc_scores.txt")
     write_standard_summary(
         save_dir=str(results_path),
-        method="hyperpinn_itc",
+        method="baseline_hyperpinn",
         scene=SCENE_REGISTRY[args.scene].label,
         config={
             "scene": args.scene,
@@ -153,9 +127,6 @@ def main():
             "max_order": effective_max_order,
             "gpu_id": args.gpu_id,
             "noise": args.noise,
-            "itc_rank": args.itc_rank,
-            "observed_fraction": args.observed_fraction,
-            "completion_neg_ratio": args.completion_neg_ratio,
         },
         auc_scores=auc_scores,
     )
