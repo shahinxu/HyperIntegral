@@ -60,6 +60,7 @@ class HyperPINNTopology(nn.Module):
         use_pirate=False,
         max_order=3,
         tucker_rank=8,
+        initial_active_rank=None,
     ):
         super().__init__()
         self.N = N
@@ -68,6 +69,7 @@ class HyperPINNTopology(nn.Module):
         self.use_pirate = use_pirate
         self.max_order = max_order
         self.tucker_rank = tucker_rank
+        self.tucker_capacity = tucker_rank
         input_dim = 1
 
         if max_order not in (2, 3):
@@ -122,9 +124,100 @@ class HyperPINNTopology(nn.Module):
             self.tucker_raw_u3 = None
             self.tucker_raw_core3 = None
 
+        self.register_buffer("tucker_rank_mask2", torch.ones(tucker_rank, dtype=torch.float32))
+        if max_order >= 3:
+            self.register_buffer("tucker_rank_mask3", torch.ones(tucker_rank, dtype=torch.float32))
+        else:
+            self.tucker_rank_mask3 = None
+        self._initialize_active_ranks(initial_active_rank)
+
         self.lambda_l1_edges = 0.01
         self.lambda_l1_triangles = 0.01
         self.factor_l2 = 1e-6
+
+    def _initialize_active_ranks(self, initial_active_rank):
+        if initial_active_rank is None:
+            initial_active_rank = self.tucker_capacity
+        initial_active_rank = int(max(1, min(self.tucker_capacity, initial_active_rank)))
+        with torch.no_grad():
+            self.tucker_rank_mask2.zero_()
+            self.tucker_rank_mask2[:initial_active_rank] = 1.0
+            if self.max_order >= 3:
+                self.tucker_rank_mask3.zero_()
+                self.tucker_rank_mask3[:initial_active_rank] = 1.0
+
+    def get_active_ranks(self):
+        info = {"order2": int((self.tucker_rank_mask2 > 0).sum().item())}
+        if self.max_order >= 3:
+            info["order3"] = int((self.tucker_rank_mask3 > 0).sum().item())
+        return info
+
+    def _active_indices(self, order):
+        mask = self.tucker_rank_mask2 if order == 2 else self.tucker_rank_mask3
+        return torch.nonzero(mask > 0, as_tuple=False).flatten()
+
+    def _inactive_indices(self, order):
+        mask = self.tucker_rank_mask2 if order == 2 else self.tucker_rank_mask3
+        return torch.nonzero(mask <= 0, as_tuple=False).flatten()
+
+    def _column_singular_values(self, order):
+        if order == 2:
+            u = F.softplus(self.tucker_raw_u2)
+        else:
+            u = F.softplus(self.tucker_raw_u3)
+        active_idx = self._active_indices(order)
+        if active_idx.numel() == 0:
+            return torch.empty(0, device=u.device)
+        u_active = u[:, active_idx]
+        if u_active.shape[1] == 1:
+            return u_active.norm(dim=0)
+        return torch.linalg.svdvals(u_active)
+
+    def adapt_rank(self, loss_plateau, min_rank=2, grow_step=1, prune_sv_ratio=1e-2):
+        info = {
+            "changed": False,
+            "events": [],
+            "active": self.get_active_ranks(),
+        }
+        min_rank = int(max(1, min(self.tucker_capacity, min_rank)))
+        grow_step = int(max(1, grow_step))
+
+        for order in (2, 3):
+            if order > self.max_order:
+                continue
+
+            mask = self.tucker_rank_mask2 if order == 2 else self.tucker_rank_mask3
+            active_idx = self._active_indices(order)
+            active_count = int(active_idx.numel())
+            sv = self._column_singular_values(order)
+            sv_ratio = 1.0
+            if sv.numel() >= 2:
+                sv_ratio = float((sv[-1] / (sv[0] + 1e-12)).detach().cpu())
+
+            if active_count > min_rank and sv.numel() >= 2 and sv_ratio < prune_sv_ratio:
+                u = F.softplus(self.tucker_raw_u2 if order == 2 else self.tucker_raw_u3)
+                dim_score = u.mean(dim=0)
+                active_score = dim_score[active_idx]
+                local_pos = int(torch.argmin(active_score).item())
+                prune_idx = int(active_idx[local_pos].item())
+                with torch.no_grad():
+                    mask[prune_idx] = 0.0
+                info["changed"] = True
+                info["events"].append(
+                    f"prune order{order}: dim {prune_idx} (sv_ratio={sv_ratio:.3e})"
+                )
+
+            if loss_plateau:
+                inactive_idx = self._inactive_indices(order)
+                if inactive_idx.numel() > 0:
+                    n_grow = min(grow_step, int(inactive_idx.numel()))
+                    with torch.no_grad():
+                        mask[inactive_idx[:n_grow]] = 1.0
+                    info["changed"] = True
+                    info["events"].append(f"grow order{order}: +{n_grow} dim(s)")
+
+        info["active"] = self.get_active_ranks()
+        return info
 
     def _symmetrize_core3(self, core):
         return (
@@ -138,14 +231,18 @@ class HyperPINNTopology(nn.Module):
 
     def _tucker_factors(self, order):
         if order == 2:
-            u2 = F.softplus(self.tucker_raw_u2)
+            mask2 = self.tucker_rank_mask2
+            u2 = F.softplus(self.tucker_raw_u2) * mask2.unsqueeze(0)
             core2 = F.softplus(self.tucker_raw_core2)
             core2 = 0.5 * (core2 + core2.transpose(0, 1))
+            core2 = core2 * (mask2.unsqueeze(0) * mask2.unsqueeze(1))
             return u2, core2
         if order == 3 and self.max_order >= 3:
-            u3 = F.softplus(self.tucker_raw_u3)
+            mask3 = self.tucker_rank_mask3
+            u3 = F.softplus(self.tucker_raw_u3) * mask3.unsqueeze(0)
             core3 = F.softplus(self.tucker_raw_core3)
             core3 = self._symmetrize_core3(core3)
+            core3 = core3 * (mask3[:, None, None] * mask3[None, :, None] * mask3[None, None, :])
             return u3, core3
         raise ValueError(f"Unsupported order for Tucker factors: {order}")
 

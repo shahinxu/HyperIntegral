@@ -196,9 +196,13 @@ class HyperPINNTopology(nn.Module):
     def _itc_factors(self, order, observed_trajectory):
         node_latents = self.encode_nodes(observed_trajectory)
         if order == 2:
-            return F.softplus(self.factor_head2(node_latents)), F.softplus(self.raw_lambda2)
+            u2 = F.softplus(self.factor_head2(node_latents))
+            lam2 = F.softplus(self.raw_lambda2)
+            return u2, lam2
         if order == 3 and self.max_order >= 3:
-            return F.softplus(self.factor_head3(node_latents)), F.softplus(self.raw_lambda3)
+            u3 = F.softplus(self.factor_head3(node_latents))
+            lam3 = F.softplus(self.raw_lambda3)
+            return u3, lam3
         raise ValueError(f"Unsupported order for ITC factors: {order}")
 
     def score_order_edges(self, order_key, edges, observed_trajectory, one_based=True):

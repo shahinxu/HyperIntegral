@@ -79,7 +79,7 @@ def main():
                         help="Rossler hypergraph preset (n8, n16, n32, n64, n100)")
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--n_nodes", type=int, default=None)
-    parser.add_argument("--max_order", type=int, default=None)
+    parser.add_argument("--max_order", type=int, default=3)
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--n_epochs", type=int, default=20000)
@@ -103,7 +103,7 @@ def main():
     else:
         effective_n_nodes = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
 
-    effective_max_order = defaults["max_order"] if args.max_order is None else args.max_order
+    effective_max_order = args.max_order
 
     script = SCENE_TO_SCRIPT[scene]
     script_path = HYPERPINN_ROOT / script

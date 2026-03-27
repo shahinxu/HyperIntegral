@@ -177,7 +177,17 @@ def write_csv(out_csv: Path, nodes: List[int], latest: Dict[Tuple[str, int], Run
 def plot_macro_auc(nodes: List[int], latest: Dict[Tuple[str, int], RunRecord], out_png: Path, title: str) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
 
-    plt.figure(figsize=(10, 6))
+    METHOD_MARKERS = {
+        "CP":     ("o", 14),   # circle
+        "Tucker": ("s", 13),   # square
+        "TT":     ("^", 14),   # triangle up
+        "ITC":    ("D", 12),   # diamond
+        "base":   ("P", 14),   # thick plus
+    }
+
+    plt.figure(figsize=(8, 7))
+    ax = plt.gca()
+
     methods = ["CP", "Tucker", "TT", "ITC", "base"]
     for method in methods:
         y_vals: List[float] = []
@@ -185,18 +195,51 @@ def plot_macro_auc(nodes: List[int], latest: Dict[Tuple[str, int], RunRecord], o
             rec = latest.get((method, node))
             y_vals.append(rec.macro_auc if rec is not None else math.nan)
 
-        plt.plot(nodes, y_vals, marker="o", linewidth=2, label=method)
+        marker, ms = METHOD_MARKERS.get(method, ("o", 12))
+        ax.plot(
+            nodes, y_vals,
+            marker=marker, markersize=ms,
+            linewidth=2.5, label=method,
+        )
 
-    plt.xlabel("Node Count")
-    plt.ylabel("Macro-AUC")
-    plt.title(title)
-    plt.xticks(nodes)
-    plt.ylim(0.0, 1.02)
-    plt.grid(True, alpha=0.25)
-    plt.legend()
+    ax.set_xlabel("Node Count", fontsize=20, fontweight="bold", labelpad=10)
+    ax.set_ylabel("Macro-AUC", fontsize=20, fontweight="bold", labelpad=10)
+    ax.set_xscale("log")
+    ax.set_xticks([10, 100])
+    ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
+    ax.minorticks_off()
+    ax.tick_params(axis="both", labelsize=16, width=1.5)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontweight("bold")
+    ax.set_ylim(0.0, 1.05)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=15, title_fontsize=15, prop={"weight": "bold", "size": 15})
     plt.tight_layout()
     plt.savefig(out_png, dpi=180)
     plt.close()
+
+
+def load_from_csv(csv_path: Path) -> Tuple[Dict[Tuple[str, int], RunRecord], List[int]]:
+    """Load precomputed Macro-AUC values from a CSV with columns: method,node,macro_auc."""
+    latest: Dict[Tuple[str, int], RunRecord] = {}
+    nodes_set: set = set()
+    with csv_path.open(encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            method = row["method"].strip()
+            node = int(row["node"].strip())
+            macro_auc = float(row["macro_auc"].strip())
+            nodes_set.add(node)
+            latest[(method, node)] = RunRecord(
+                method_label=method,
+                node=node,
+                run_dir=Path("."),
+                timestamp=datetime.min,
+                auc2=macro_auc,
+                auc3=macro_auc,
+                macro_auc=macro_auc,
+            )
+    return latest, sorted(nodes_set)
 
 
 def main() -> None:
@@ -207,18 +250,23 @@ def main() -> None:
     parser.add_argument("--out-png", default="results/figures/macro_auc_vs_nodes.png", help="Output figure path.")
     parser.add_argument("--out-csv", default="results/figures/macro_auc_vs_nodes.csv", help="Output table path.")
     parser.add_argument("--title", default="Macro-AUC vs Node Count", help="Plot title.")
+    parser.add_argument("--from-csv", default=None, help="Load precomputed Macro-AUC directly from CSV (method,node,macro_auc). Skips results scan.")
     args = parser.parse_args()
 
-    nodes = [int(x.strip()) for x in args.nodes.split(",") if x.strip()]
-    results_root = Path(args.results_root)
-
-    records = collect_records(results_root=results_root, scene=args.scene)
-    latest = select_latest(records)
+    if args.from_csv is not None:
+        latest, nodes = load_from_csv(Path(args.from_csv))
+        records = []
+    else:
+        nodes = [int(x.strip()) for x in args.nodes.split(",") if x.strip()]
+        results_root = Path(args.results_root)
+        records = collect_records(results_root=results_root, scene=args.scene)
+        latest = select_latest(records)
 
     write_csv(Path(args.out_csv), nodes, latest)
     plot_macro_auc(nodes, latest, Path(args.out_png), args.title)
 
-    print(f"Collected runs: {len(records)}")
+    if args.from_csv is None:
+        print(f"Collected runs: {len(records)}")
     print(f"Saved CSV: {args.out_csv}")
     print(f"Saved plot: {args.out_png}")
 

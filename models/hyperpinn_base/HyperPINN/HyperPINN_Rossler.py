@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser(description='Run Rossler Oscillators with Hyper
 parser.add_argument('--M', type=int, default=150)
 parser.add_argument('--tmax', type=float, default=20)
 parser.add_argument('--N', type=int, default=defaults['n_nodes'])
-parser.add_argument('--max_order', type=int, default=defaults['max_order'])
+parser.add_argument('--max_order', type=int, default=3)
 parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--noise', type=float, default=0.0)
 args = parser.parse_args()

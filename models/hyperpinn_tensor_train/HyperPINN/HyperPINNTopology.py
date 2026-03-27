@@ -60,6 +60,7 @@ class HyperPINNTopology(nn.Module):
         use_pirate=False,
         max_order=3,
         tt_rank=8,
+        initial_active_rank=None,
     ):
         super().__init__()
         self.N = N
@@ -68,6 +69,7 @@ class HyperPINNTopology(nn.Module):
         self.use_pirate = use_pirate
         self.max_order = max_order
         self.tt_rank = tt_rank
+        self.tt_capacity = tt_rank
         input_dim = 1
 
         if max_order not in (2, 3):
@@ -124,20 +126,122 @@ class HyperPINNTopology(nn.Module):
             self.tt_raw_core2 = None
             self.tt_raw_core3 = None
 
+        self.register_buffer("tt_rank_mask2", torch.ones(tt_rank, dtype=torch.float32))
+        if max_order >= 3:
+            self.register_buffer("tt_rank_mask3", torch.ones(tt_rank, dtype=torch.float32))
+        else:
+            self.tt_rank_mask3 = None
+        self._initialize_active_ranks(initial_active_rank)
+
         self.lambda_l1_edges = 0.01
         self.lambda_l1_triangles = 0.01
         self.factor_l2 = 1e-6
 
+    def _initialize_active_ranks(self, initial_active_rank):
+        if initial_active_rank is None:
+            initial_active_rank = self.tt_capacity
+        initial_active_rank = int(max(1, min(self.tt_capacity, initial_active_rank)))
+        with torch.no_grad():
+            self.tt_rank_mask2.zero_()
+            self.tt_rank_mask2[:initial_active_rank] = 1.0
+            if self.max_order >= 3:
+                self.tt_rank_mask3.zero_()
+                self.tt_rank_mask3[:initial_active_rank] = 1.0
+
+    def get_active_ranks(self):
+        info = {"order2": int((self.tt_rank_mask2 > 0).sum().item())}
+        if self.max_order >= 3:
+            info["order3"] = int((self.tt_rank_mask3 > 0).sum().item())
+        return info
+
+    def _active_indices(self, order):
+        mask = self.tt_rank_mask2 if order == 2 else self.tt_rank_mask3
+        return torch.nonzero(mask > 0, as_tuple=False).flatten()
+
+    def _inactive_indices(self, order):
+        mask = self.tt_rank_mask2 if order == 2 else self.tt_rank_mask3
+        return torch.nonzero(mask <= 0, as_tuple=False).flatten()
+
+    def _column_singular_values(self, order):
+        if order == 2:
+            left, right = self._pair_factors()
+            mat = 0.5 * (left + right)
+        else:
+            core1, _, core3 = self._triple_factors()
+            mat = 0.5 * (core1 + core3)
+        active_idx = self._active_indices(order)
+        if active_idx.numel() == 0:
+            return torch.empty(0, device=mat.device)
+        mat_active = mat[:, active_idx]
+        if mat_active.shape[1] == 1:
+            return mat_active.norm(dim=0)
+        return torch.linalg.svdvals(mat_active)
+
+    def adapt_rank(self, loss_plateau, min_rank=2, grow_step=1, prune_sv_ratio=1e-2):
+        info = {
+            "changed": False,
+            "events": [],
+            "active": self.get_active_ranks(),
+        }
+        min_rank = int(max(1, min(self.tt_capacity, min_rank)))
+        grow_step = int(max(1, grow_step))
+
+        for order in (2, 3):
+            if order > self.max_order:
+                continue
+
+            mask = self.tt_rank_mask2 if order == 2 else self.tt_rank_mask3
+            active_idx = self._active_indices(order)
+            active_count = int(active_idx.numel())
+            sv = self._column_singular_values(order)
+            sv_ratio = 1.0
+            if sv.numel() >= 2:
+                sv_ratio = float((sv[-1] / (sv[0] + 1e-12)).detach().cpu())
+
+            if active_count > min_rank and sv.numel() >= 2 and sv_ratio < prune_sv_ratio:
+                if order == 2:
+                    left, right = self._pair_factors()
+                    dim_score = (left + right).mean(dim=0)
+                else:
+                    core1, _, core3 = self._triple_factors()
+                    dim_score = (core1 + core3).mean(dim=0)
+                active_score = dim_score[active_idx]
+                local_pos = int(torch.argmin(active_score).item())
+                prune_idx = int(active_idx[local_pos].item())
+                with torch.no_grad():
+                    mask[prune_idx] = 0.0
+                info["changed"] = True
+                info["events"].append(
+                    f"prune order{order}: dim {prune_idx} (sv_ratio={sv_ratio:.3e})"
+                )
+
+            if loss_plateau:
+                inactive_idx = self._inactive_indices(order)
+                if inactive_idx.numel() > 0:
+                    n_grow = min(grow_step, int(inactive_idx.numel()))
+                    with torch.no_grad():
+                        mask[inactive_idx[:n_grow]] = 1.0
+                    info["changed"] = True
+                    info["events"].append(f"grow order{order}: +{n_grow} dim(s)")
+
+        info["active"] = self.get_active_ranks()
+        return info
+
     def _pair_factors(self):
-        return F.softplus(self.tt_raw_pair_left), F.softplus(self.tt_raw_pair_right)
+        mask = self.tt_rank_mask2
+        left = F.softplus(self.tt_raw_pair_left) * mask.unsqueeze(0)
+        right = F.softplus(self.tt_raw_pair_right) * mask.unsqueeze(0)
+        return left, right
 
     def _triple_factors(self):
         if self.max_order < 3:
             raise ValueError("Third-order TT factors requested with max_order < 3")
+        mask = self.tt_rank_mask3
+        mask_outer = mask.unsqueeze(0) * mask.unsqueeze(1)
         return (
-            F.softplus(self.tt_raw_core1),
-            F.softplus(self.tt_raw_core2),
-            F.softplus(self.tt_raw_core3),
+            F.softplus(self.tt_raw_core1) * mask.unsqueeze(0),
+            F.softplus(self.tt_raw_core2) * mask_outer.unsqueeze(0),
+            F.softplus(self.tt_raw_core3) * mask.unsqueeze(0),
         )
 
     def forward(self, t):
