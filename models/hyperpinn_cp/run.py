@@ -21,6 +21,15 @@ SCENE_TO_SCRIPT = {
 
 FILE_DRIVEN_SCENES = set()
 
+# Supported Rossler hypergraph presets
+ROSSLER_PRESETS = {
+    "n8": {"preset": "n8", "n_nodes": 8},
+    "n16": {"preset": "n16", "n_nodes": 16},
+    "n32": {"preset": "n32", "n_nodes": 32},
+    "n64": {"preset": "n64", "n_nodes": 64},
+    "n100": {"preset": "n100", "n_nodes": 100},
+}
+
 
 def parse_auc_file(path: Path):
     auc_scores = {}
@@ -66,7 +75,8 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scene", required=True, choices=sorted(SCENE_TO_SCRIPT.keys()))
+    parser.add_argument("--preset", type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+                        help="Rossler hypergraph preset (n8, n16, n32, n64, n100)")
     parser.add_argument("--n_samples", type=int, default=150)
     parser.add_argument("--n_nodes", type=int, default=None)
     parser.add_argument("--max_order", type=int, default=3)
@@ -82,14 +92,24 @@ def main():
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     args = parser.parse_args()
 
-    HypergraphModel, _ = get_scene_model(args.scene)
+    scene = "rossler"
+
+    HypergraphModel, _ = get_scene_model(scene)
     defaults = HypergraphModel.get_default_params()
+
+    # Handle preset selection
+    if args.preset is not None:
+        preset_config = ROSSLER_PRESETS[args.preset]
+        effective_n_nodes = preset_config["n_nodes"]
+        os.environ["ROSSLER_HYPERGRAPH_PRESET"] = preset_config["preset"]
+    else:
+        effective_n_nodes = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
 
     effective_max_order = int(args.max_order)
     if effective_max_order not in (2, 3):
         raise ValueError(f"hyperpinn_cp only supports max_order in {{2, 3}}, got {effective_max_order}.")
 
-    script = SCENE_TO_SCRIPT[args.scene]
+    script = SCENE_TO_SCRIPT[scene]
     script_path = HYPERPINN_ROOT / script
     cmd = [
         sys.executable,
@@ -112,8 +132,8 @@ def main():
         "--lr",
         str(args.lr),
     ]
-    if args.n_nodes is not None:
-        cmd.extend(["--N", str(args.n_nodes)])
+    if effective_n_nodes is not None:
+        cmd.extend(["--N", str(effective_n_nodes)])
 
     env = os.environ.copy()
     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
@@ -137,11 +157,12 @@ def main():
     write_standard_summary(
         save_dir=str(results_path),
         method="baseline_hyperpinn_cp",
-        scene=SCENE_REGISTRY[args.scene].label,
+        scene=SCENE_REGISTRY[scene].label,
         config={
-            "scene": args.scene,
+            "scene": scene,
+            "preset": args.preset,
             "n_samples": args.n_samples,
-            "n_nodes": defaults["n_nodes"] if args.n_nodes is None else args.n_nodes,
+            "n_nodes": effective_n_nodes,
             "max_order": effective_max_order,
             "gpu_id": args.gpu_id,
             "noise": args.noise,

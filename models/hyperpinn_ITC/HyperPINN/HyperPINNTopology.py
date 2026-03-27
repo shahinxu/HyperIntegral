@@ -121,10 +121,10 @@ class HyperPINNTopology(nn.Module):
             nn.GELU(),
         )
         self.factor_head2 = nn.Linear(hidden_dim, itc_rank)
-        self.raw_lambda2 = nn.Parameter(-6.0 + 0.02 * torch.randn(itc_rank))
+        self.raw_lambda2 = nn.Parameter(-3.0 + 0.02 * torch.randn(itc_rank))
         if max_order >= 3:
             self.factor_head3 = nn.Linear(hidden_dim, itc_rank)
-            self.raw_lambda3 = nn.Parameter(-6.0 + 0.02 * torch.randn(itc_rank))
+            self.raw_lambda3 = nn.Parameter(-3.0 + 0.02 * torch.randn(itc_rank))
         else:
             self.factor_head3 = None
             self.raw_lambda3 = None

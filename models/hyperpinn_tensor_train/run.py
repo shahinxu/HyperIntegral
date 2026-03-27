@@ -18,6 +18,15 @@ SCENE_TO_SCRIPT = {
     'rossler': 'HyperPINN_Rossler.py',
 }
 
+# Supported Rossler hypergraph presets
+ROSSLER_PRESETS = {
+    "n8": {"preset": "n8", "n_nodes": 8},
+    "n16": {"preset": "n16", "n_nodes": 16},
+    "n32": {"preset": "n32", "n_nodes": 32},
+    "n64": {"preset": "n64", "n_nodes": 64},
+    "n100": {"preset": "n100", "n_nodes": 100},
+}
+
 
 def parse_auc_file(path: Path):
     auc_scores = {}
@@ -63,7 +72,8 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--scene', required=True, choices=sorted(SCENE_TO_SCRIPT.keys()))
+    parser.add_argument('--preset', type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+                        help='Rossler hypergraph preset (n8, n16, n32, n64, n100)')
     parser.add_argument('--n_samples', type=int, default=300)
     parser.add_argument('--n_nodes', type=int, default=100)
     parser.add_argument('--max_order', type=int, default=3)
@@ -76,11 +86,21 @@ def main():
     parser.add_argument('--results_root', type=str, default='results/hyperpinn_tensor_train')
     args = parser.parse_args()
 
+    scene = 'rossler'
+
+    # Handle preset selection
+    if args.preset is not None:
+        preset_config = ROSSLER_PRESETS[args.preset]
+        effective_n_nodes = preset_config["n_nodes"]
+        os.environ["ROSSLER_HYPERGRAPH_PRESET"] = preset_config["preset"]
+    else:
+        effective_n_nodes = args.n_nodes
+
     effective_max_order = int(args.max_order)
     if effective_max_order not in (2, 3):
         raise ValueError(f'hyperpinn_tensor_train only supports max_order in {{2, 3}}, got {effective_max_order}.')
 
-    script_path = HYPERPINN_ROOT / SCENE_TO_SCRIPT[args.scene]
+    script_path = HYPERPINN_ROOT / SCENE_TO_SCRIPT[scene]
     cmd = [
         sys.executable,
         '-u',
@@ -88,7 +108,7 @@ def main():
         '--M',
         str(args.n_samples),
         '--N',
-        str(args.n_nodes),
+        str(effective_n_nodes),
         '--max_order',
         str(effective_max_order),
         '--gpu_id',
@@ -127,11 +147,12 @@ def main():
     write_standard_summary(
         save_dir=str(results_path),
         method='baseline_hyperpinn_tensor_train',
-        scene=SCENE_REGISTRY[args.scene].label,
+        scene=SCENE_REGISTRY[scene].label,
         config={
-            'scene': args.scene,
+            'scene': scene,
+            'preset': args.preset,
             'n_samples': args.n_samples,
-            'n_nodes': args.n_nodes,
+            'n_nodes': effective_n_nodes,
             'max_order': effective_max_order,
             'gpu_id': args.gpu_id,
             'noise': args.noise,

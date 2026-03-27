@@ -226,6 +226,29 @@ def plot_roc(y_true, y_score, label):
     return fpr, tpr, auc_score
 
 
+def summarize_topology_stats(model):
+    topo_param_names = ['tt_raw_pair_left', 'tt_raw_pair_right']
+    if model.max_order >= 3:
+        topo_param_names.extend(['tt_raw_core1', 'tt_raw_core2', 'tt_raw_core3'])
+
+    grad_parts = []
+    param_parts = []
+    total_grad_sq = 0.0
+    total_param_sq = 0.0
+    for name in topo_param_names:
+        param = model.get_parameter(name)
+        param_norm = float(param.detach().norm().cpu())
+        grad_norm = 0.0 if param.grad is None else float(param.grad.detach().norm().cpu())
+        total_grad_sq += grad_norm * grad_norm
+        total_param_sq += param_norm * param_norm
+        grad_parts.append(f'{name}={grad_norm:.3e}')
+        param_parts.append(f'{name}={param_norm:.3e}')
+
+    total_grad = total_grad_sq ** 0.5
+    total_param = total_param_sq ** 0.5
+    return total_grad, total_param, grad_parts, param_parts
+
+
 for epoch in range(epochs):
     optimizer.zero_grad(set_to_none=True)
     x_pred = model.forward(t_data)
@@ -237,14 +260,14 @@ for epoch in range(epochs):
         sparsity_weight = 1.0
 
     if epoch < stage1_epochs:
-        physics_loss = torch.zeros((), device=device, dtype=x_pred.dtype)
+        physics_loss = model.physics_loss(t_data)
         sparsity_loss = torch.zeros((), device=device, dtype=x_pred.dtype)
         sparsity_info = {
             'l1_edges': 0.0,
             'l1_triangles': 0.0,
             'l1_tt_factor_penalty': 0.0,
         }
-        physics_weight = 0.0
+        physics_weight = 0.1
         data_weight = 1.0
         sparsity_weight = 0.0
     elif epoch < stage2_epochs:
@@ -271,6 +294,7 @@ for epoch in range(epochs):
     sparsity_stats.append(sparsity_info)
 
     if epoch % 500 == 0:
+        topo_grad_norm, topo_param_norm, grad_parts, param_parts = summarize_topology_stats(model)
         print(f"\n{'=' * 80}")
         print(f'Epoch {epoch}, Total Loss: {total_loss.item():.6f}')
         print(f'  Physics: {physics_loss.item():.6f}, Data: {data_loss.item():.6f}')
@@ -280,6 +304,9 @@ for epoch in range(epochs):
             f"  L1 triangles: {sparsity_info['l1_triangles']:.2f},"
             f"  Factor penalty: {sparsity_info['l1_tt_factor_penalty']:.6f}"
         )
+        print(f'  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}')
+        print(f"  Topology grad detail: {', '.join(grad_parts)}")
+        print(f"  Topology param detail: {', '.join(param_parts)}")
 
         with torch.no_grad():
             X_pred = model.forward(t_data).cpu().numpy()

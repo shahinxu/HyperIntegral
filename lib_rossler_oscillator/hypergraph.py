@@ -15,6 +15,10 @@ class HypergraphModel:
     def _preset_hypergraph_file(preset: str = "n100") -> Path:
         preset_name = (preset or "n100").strip().lower()
         preset_map = {
+            "n8": "rossler_oscillator_n8_hypergraph.json",
+            "n16": "rossler_oscillator_n16_hypergraph.json",
+            "n32": "rossler_oscillator_n32_hypergraph.json",
+            "n64": "rossler_oscillator_n64_hypergraph.json",
             "n100": "rossler_oscillator_n100_hypergraph.json",
         }
         if preset_name not in preset_map:

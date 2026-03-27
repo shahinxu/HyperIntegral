@@ -98,6 +98,33 @@ def evaluate_edges_triangles(model, observed_trajectory, all_2edges, true_2edges
     return y_true_2, y_score_2, y_true_3, y_score_3
 
 
+def summarize_topology_stats(model):
+    topo_prefixes = ("node_encoder.", "factor_head2.", "factor_head3.")
+    topo_exact = {"raw_lambda2", "raw_lambda3"}
+
+    grad_parts = []
+    param_parts = []
+    total_grad_sq = 0.0
+    total_param_sq = 0.0
+
+    for name, param in model.named_parameters():
+        if not (name.startswith(topo_prefixes) or name in topo_exact):
+            continue
+        if name == "raw_lambda3" and model.max_order < 3:
+            continue
+
+        param_norm = float(param.detach().norm().cpu())
+        grad_norm = 0.0 if param.grad is None else float(param.grad.detach().norm().cpu())
+        total_grad_sq += grad_norm * grad_norm
+        total_param_sq += param_norm * param_norm
+        grad_parts.append(f"{name}={grad_norm:.3e}")
+        param_parts.append(f"{name}={param_norm:.3e}")
+
+    total_grad = total_grad_sq ** 0.5
+    total_param = total_param_sq ** 0.5
+    return total_grad, total_param, grad_parts, param_parts
+
+
 def save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, max_order, name_prefix="true"):
     orders = [2, 3] if max_order >= 3 else [2]
     true_lists = [sorted(true_2edges), sorted(true_3edges)][:len(orders)]
@@ -313,7 +340,7 @@ def main():
         if epoch < stage1_epochs:
             data_weight = 1.0
             completion_weight = 0.0
-            physics_weight = 0.0
+            physics_weight = 0.1
             sparsity_weight = 0.0
             print_prefix = "Stage 1 (Data Fitting)"
         elif epoch < stage2_epochs:
@@ -345,6 +372,7 @@ def main():
         sparsity_stats.append(sparsity_info)
 
         if epoch % 500 == 0:
+            topo_grad_norm, topo_param_norm, grad_parts, param_parts = summarize_topology_stats(model)
             print(f"\n{'=' * 80}")
             print(f"{print_prefix} | Epoch {epoch}, Total Loss: {total_loss.item():.6f}")
             print(
@@ -360,6 +388,9 @@ def main():
                 f"  Completion edges: {completion_info['completion_edges']:.6f}, "
                 f"Completion triangles: {completion_info['completion_triangles']:.6f}"
             )
+            print(f"  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}")
+            print(f"  Topology grad detail: {', '.join(grad_parts)}")
+            print(f"  Topology param detail: {', '.join(param_parts)}")
 
             with torch.no_grad():
                 X_pred = model.forward(t_data).cpu().numpy()

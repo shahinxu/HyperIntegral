@@ -112,12 +112,12 @@ class HyperPINNTopology(nn.Module):
         else:
             raise ValueError("Specify one of: use_resnet=True or use_attention=True")
         
-        # Weak-coupling initialization keeps early training focused on fitting trajectories.
-        self.cp_raw_u2 = nn.Parameter(-6.0 + 0.02 * torch.randn(N, cp_rank))
-        self.cp_raw_lambda2 = nn.Parameter(-6.0 + 0.02 * torch.randn(cp_rank))
+        # Use a less aggressive weak-coupling init so topology gradients do not vanish.
+        self.cp_raw_u2 = nn.Parameter(-3.0 + 0.02 * torch.randn(N, cp_rank))
+        self.cp_raw_lambda2 = nn.Parameter(-3.0 + 0.02 * torch.randn(cp_rank))
         if max_order >= 3:
-            self.cp_raw_u3 = nn.Parameter(-6.0 + 0.02 * torch.randn(N, cp_rank))
-            self.cp_raw_lambda3 = nn.Parameter(-6.0 + 0.02 * torch.randn(cp_rank))
+            self.cp_raw_u3 = nn.Parameter(-3.0 + 0.02 * torch.randn(N, cp_rank))
+            self.cp_raw_lambda3 = nn.Parameter(-3.0 + 0.02 * torch.randn(cp_rank))
         else:
             self.cp_raw_u3 = None
             self.cp_raw_lambda3 = None
