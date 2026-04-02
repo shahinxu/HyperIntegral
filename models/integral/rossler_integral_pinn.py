@@ -662,32 +662,26 @@ def compute_auc_scores(A_learned, edge_config, N, max_order):
         if len(possible_edges) == 0:
             continue
         
-        # Create ground truth labels
         y_true = []
         y_pred = []
         
         for edge in possible_edges:
-            # Check if this hyperedge is in the true configuration
             is_true_edge = any(
                 sorted(edge) == sorted(true_edge) 
                 for true_edge in true_edges
             )
             y_true.append(1 if is_true_edge else 0)
             
-            # Predicted value (using sigmoid)
             if A_idx < len(A_flat):
                 pred_score = 1 / (1 + np.exp(-A_flat[A_idx]))
                 y_pred.append(pred_score)
                 A_idx += 1
             else:
-                # If A length is not enough, means these hyperedges are not in training config
                 y_pred.append(0.0)
         
-        # Compute AUC
         y_true = np.array(y_true)
         y_pred = np.array(y_pred)
         
-        # Only compute AUC when both positive and negative samples exist
         if len(np.unique(y_true)) > 1:
             fpr, tpr, _ = roc_curve(y_true, y_pred)
             auc_score = auc(fpr, tpr)
