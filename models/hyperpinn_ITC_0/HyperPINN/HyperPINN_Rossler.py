@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import sys
 from datetime import datetime
@@ -19,47 +18,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from lib_rossler_oscillator.hypergraph import HypergraphModel as RosslerHypergraphModel
-
-
-def build_completion_batch(all_edges, true_edges, observed_fraction, negative_ratio, seed):
-    rng = np.random.default_rng(seed)
-    edge_width = len(all_edges[0]) if all_edges else 0
-    positive_edges = np.array(sorted(true_edges), dtype=int)
-    negative_edges = np.array([edge for edge in all_edges if tuple(sorted(edge)) not in true_edges], dtype=int)
-
-    if positive_edges.size == 0:
-        return {
-            "indices": np.empty((0, edge_width), dtype=int),
-            "labels": np.empty((0,), dtype=np.float32),
-            "n_positive": 0,
-            "n_negative": 0,
-        }
-
-    n_pos = max(1, int(round(observed_fraction * len(positive_edges))))
-    n_pos = min(n_pos, len(positive_edges))
-    pos_choice = rng.choice(len(positive_edges), size=n_pos, replace=False)
-    sampled_pos = positive_edges[pos_choice]
-
-    if negative_edges.size == 0:
-        sampled_neg = np.empty((0, edge_width), dtype=int)
-    else:
-        n_neg = max(1, int(round(negative_ratio * n_pos)))
-        n_neg = min(n_neg, len(negative_edges))
-        neg_choice = rng.choice(len(negative_edges), size=n_neg, replace=False)
-        sampled_neg = negative_edges[neg_choice]
-
-    indices = np.concatenate([sampled_pos, sampled_neg], axis=0)
-    labels = np.concatenate(
-        [np.ones(len(sampled_pos), dtype=np.float32), np.zeros(len(sampled_neg), dtype=np.float32)],
-        axis=0,
-    )
-    permutation = rng.permutation(len(indices))
-    return {
-        "indices": indices[permutation],
-        "labels": labels[permutation],
-        "n_positive": int(len(sampled_pos)),
-        "n_negative": int(len(sampled_neg)),
-    }
 
 
 def get_labels_and_scores(all_edges, true_edges, probs):
@@ -177,9 +135,6 @@ def main():
     parser.add_argument("--itc_rank", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=14000)
     parser.add_argument("--lr", type=float, default=5e-4)
-    parser.add_argument("--observed_fraction", type=float, default=0.5)
-    parser.add_argument("--completion_neg_ratio", type=float, default=1.0)
-    parser.add_argument("--completion_seed", type=int, default=42)
     args = parser.parse_args()
 
     N = args.N
@@ -257,38 +212,6 @@ def main():
 
     save_true_hyperedge_figures(results_dir, N, true_2edges, true_3edges, max_order)
 
-    completion_samples = {
-        "edges": build_completion_batch(
-            all_2edges,
-            true_2edges,
-            observed_fraction=args.observed_fraction,
-            negative_ratio=args.completion_neg_ratio,
-            seed=args.completion_seed,
-        ),
-    }
-    if max_order >= 3:
-        completion_samples["triangles"] = build_completion_batch(
-            all_3edges,
-            true_3edges,
-            observed_fraction=args.observed_fraction,
-            negative_ratio=args.completion_neg_ratio,
-            seed=args.completion_seed + 1,
-        )
-
-    with open(os.path.join(results_dir, "completion_observations.json"), "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                key: {
-                    "n_positive": value["n_positive"],
-                    "n_negative": value["n_negative"],
-                }
-                for key, value in completion_samples.items()
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
-
     if args.gpu_id is not None and args.gpu_id >= 0 and torch.cuda.is_available():
         device = torch.device(f"cuda:{args.gpu_id}")
         print(f"Using GPU {args.gpu_id}: {torch.cuda.get_device_name(args.gpu_id)}")
@@ -316,13 +239,6 @@ def main():
 
     t_data = t_data.float().to(device)
     x_data = x_data.float().to(device)
-    for key, batch in completion_samples.items():
-        completion_samples[key] = {
-            "indices": torch.as_tensor(batch["indices"], dtype=torch.long, device=device),
-            "labels": torch.as_tensor(batch["labels"], dtype=torch.float32, device=device),
-            "n_positive": batch["n_positive"],
-            "n_negative": batch["n_negative"],
-        }
 
     stage1_epochs = max(1, int(0.25 * args.epochs))
     stage2_epochs = max(stage1_epochs + 1, int(0.65 * args.epochs))
@@ -333,34 +249,29 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         x_pred = model.forward(t_data)
         data_loss = torch.mean((x_pred - x_data) ** 2)
-        completion_loss, completion_info = model.completion_loss(x_data, completion_samples)
         physics_loss = model.physics_loss(t_data, x_data)
         sparsity_loss, sparsity_info = model.sparsity_regularization(x_data)
 
         if epoch < stage1_epochs:
             data_weight = 1.0
-            completion_weight = 0.0
             physics_weight = 0.1
             sparsity_weight = 0.0
             print_prefix = "Stage 1 (Data Fitting)"
         elif epoch < stage2_epochs:
             progress = (epoch - stage1_epochs) / (stage2_epochs - stage1_epochs)
             data_weight = 1.0
-            completion_weight = 0.2 + 0.8 * progress
-            physics_weight = 0.0
+            physics_weight = 0.1 * progress
             sparsity_weight = 0.0
-            print_prefix = "Stage 2 (Completion Learning)"
+            print_prefix = "Stage 2 (Physics Warmup)"
         else:
             progress = min(1.0, (epoch - stage2_epochs) / max(1, args.epochs - stage2_epochs))
             data_weight = 1.0 - 0.8 * progress
-            completion_weight = 1.0
             physics_weight = 0.1 + 0.9 * progress
             sparsity_weight = 0.01 * progress
             print_prefix = "Stage 3 (Physics + Sparsity)"
 
         total_loss = (
             data_weight * data_loss
-            + completion_weight * completion_loss
             + physics_weight * physics_loss
             + sparsity_weight * sparsity_loss
         )
@@ -376,17 +287,13 @@ def main():
             print(f"\n{'=' * 80}")
             print(f"{print_prefix} | Epoch {epoch}, Total Loss: {total_loss.item():.6f}")
             print(
-                f"  Data: {data_loss.item():.6f}, Completion: {completion_loss.item():.6f}, "
+                f"  Data: {data_loss.item():.6f}, "
                 f"Physics: {physics_loss.item():.6f}, Sparsity: {sparsity_loss.item():.6f}"
             )
             print(
                 f"  L1 edges: {sparsity_info['l1_edges']:.2f}, "
                 f"L1 triangles: {sparsity_info['l1_triangles']:.2f}, "
                 f"Factor penalty: {sparsity_info['l2_factor_penalty']:.6f}"
-            )
-            print(
-                f"  Completion edges: {completion_info['completion_edges']:.6f}, "
-                f"Completion triangles: {completion_info['completion_triangles']:.6f}"
             )
             print(f"  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}")
             print(f"  Topology grad detail: {', '.join(grad_parts)}")

@@ -89,9 +89,6 @@ def main():
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
     parser.add_argument("--itc_rank", type=int, default=16)
-    parser.add_argument("--observed_fraction", type=float, default=0.5)
-    parser.add_argument("--completion_neg_ratio", type=float, default=1.0)
-    parser.add_argument("--completion_seed", type=int, default=42)
     args = parser.parse_args()
 
     scene = "rossler"
@@ -130,12 +127,6 @@ def main():
         str(args.lr),
         "--itc_rank",
         str(args.itc_rank),
-        "--observed_fraction",
-        str(args.observed_fraction),
-        "--completion_neg_ratio",
-        str(args.completion_neg_ratio),
-        "--completion_seed",
-        str(args.completion_seed),
     ]
     if effective_n_nodes is not None:
         cmd.extend(["--N", str(effective_n_nodes)])
@@ -174,8 +165,6 @@ def main():
             "gpu_id": args.gpu_id,
             "noise": args.noise,
             "itc_rank": args.itc_rank,
-            "observed_fraction": args.observed_fraction,
-            "completion_neg_ratio": args.completion_neg_ratio,
         },
         auc_scores=auc_scores,
     )

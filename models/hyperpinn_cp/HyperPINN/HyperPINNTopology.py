@@ -1,6 +1,10 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+try:
+    from torch.func import jacrev, vmap
+except ImportError:
+    from functorch import jacrev, vmap
 
 
 class ResidualBlock(nn.Module):
@@ -60,7 +64,6 @@ class HyperPINNTopology(nn.Module):
         use_pirate=False,
         max_order=3,
         cp_rank=16,
-        initial_active_rank=None,
     ):
         super().__init__()
         self.N = N
@@ -69,7 +72,6 @@ class HyperPINNTopology(nn.Module):
         self.use_pirate = use_pirate
         self.max_order = max_order
         self.cp_rank = cp_rank
-        self.cp_capacity = cp_rank
         input_dim = 1
 
         if max_order not in (2, 3):
@@ -123,112 +125,16 @@ class HyperPINNTopology(nn.Module):
         else:
             self.cp_raw_u3 = None
             self.cp_raw_lambda3 = None
-
-        self.register_buffer("cp_rank_mask2", torch.ones(cp_rank, dtype=torch.float32))
-        if max_order >= 3:
-            self.register_buffer("cp_rank_mask3", torch.ones(cp_rank, dtype=torch.float32))
-        else:
-            self.cp_rank_mask3 = None
-        self._initialize_active_ranks(initial_active_rank)
         
         self.lambda_l1_edges = 0.01      
         self.lambda_l1_triangles = 0.01 
         self.factor_l2 = 1e-6
 
-    def _initialize_active_ranks(self, initial_active_rank):
-        if initial_active_rank is None:
-            initial_active_rank = self.cp_capacity
-        initial_active_rank = int(max(1, min(self.cp_capacity, initial_active_rank)))
-        with torch.no_grad():
-            self.cp_rank_mask2.zero_()
-            self.cp_rank_mask2[:initial_active_rank] = 1.0
-            if self.max_order >= 3:
-                self.cp_rank_mask3.zero_()
-                self.cp_rank_mask3[:initial_active_rank] = 1.0
-
-    def _rank_mask(self, order):
-        return self.cp_rank_mask2 if order == 2 else self.cp_rank_mask3
-
-    def get_active_ranks(self):
-        info = {"order2": int((self.cp_rank_mask2 > 0).sum().item())}
-        if self.max_order >= 3:
-            info["order3"] = int((self.cp_rank_mask3 > 0).sum().item())
-        return info
-
-    def _active_indices(self, order):
-        mask = self._rank_mask(order)
-        return torch.nonzero(mask > 0, as_tuple=False).flatten()
-
-    def _inactive_indices(self, order):
-        mask = self._rank_mask(order)
-        return torch.nonzero(mask <= 0, as_tuple=False).flatten()
-
-    def _column_singular_values(self, order):
-        u, _ = self._cp_factors(order)
-        active_idx = self._active_indices(order)
-        if active_idx.numel() == 0:
-            return torch.empty(0, device=u.device)
-        u_active = u[:, active_idx]
-        if u_active.shape[1] == 1:
-            return u_active.norm(dim=0)
-        return torch.linalg.svdvals(u_active)
-
-    def adapt_rank(self, loss_plateau, min_rank=2, grow_step=1, prune_sv_ratio=1e-2):
-        info = {
-            "changed": False,
-            "events": [],
-            "active": self.get_active_ranks(),
-        }
-        min_rank = int(max(1, min(self.cp_capacity, min_rank)))
-        grow_step = int(max(1, grow_step))
-
-        for order in (2, 3):
-            if order > self.max_order:
-                continue
-
-            mask = self._rank_mask(order)
-            active_idx = self._active_indices(order)
-            active_count = int(active_idx.numel())
-
-            sv = self._column_singular_values(order)
-            sv_ratio = 1.0
-            if sv.numel() >= 2:
-                sv_ratio = float((sv[-1] / (sv[0] + 1e-12)).detach().cpu())
-
-            if active_count > min_rank and sv.numel() >= 2 and sv_ratio < prune_sv_ratio:
-                lam = F.softplus(self.cp_raw_lambda2 if order == 2 else self.cp_raw_lambda3)
-                lam_active = lam[active_idx]
-                local_pos = int(torch.argmin(lam_active).item())
-                prune_idx = int(active_idx[local_pos].item())
-                with torch.no_grad():
-                    mask[prune_idx] = 0.0
-                info["changed"] = True
-                info["events"].append(
-                    f"prune order{order}: dim {prune_idx} (sv_ratio={sv_ratio:.3e})"
-                )
-
-            if loss_plateau:
-                inactive_idx = self._inactive_indices(order)
-                if inactive_idx.numel() > 0:
-                    n_grow = min(grow_step, int(inactive_idx.numel()))
-                    grow_dims = inactive_idx[:n_grow]
-                    with torch.no_grad():
-                        mask[grow_dims] = 1.0
-                    info["changed"] = True
-                    info["events"].append(
-                        f"grow order{order}: +{n_grow} dim(s)"
-                    )
-
-        info["active"] = self.get_active_ranks()
-        return info
-
     def _cp_factors(self, order):
         if order == 2:
-            mask = self.cp_rank_mask2
-            return F.softplus(self.cp_raw_u2) * mask.unsqueeze(0), F.softplus(self.cp_raw_lambda2) * mask
+            return F.softplus(self.cp_raw_u2), F.softplus(self.cp_raw_lambda2)
         if order == 3 and self.max_order >= 3:
-            mask = self.cp_rank_mask3
-            return F.softplus(self.cp_raw_u3) * mask.unsqueeze(0), F.softplus(self.cp_raw_lambda3) * mask
+            return F.softplus(self.cp_raw_u3), F.softplus(self.cp_raw_lambda3)
         raise ValueError(f"Unsupported order for CP factors: {order}")
 
     def forward(self, t):
@@ -342,13 +248,18 @@ class HyperPINNTopology(nn.Module):
 
         inner = a_tilde * b_tilde - d_tilde - x_i_cu * (c_tilde * c_tilde - e_tilde)
         return torch.sum(inner * ui * lam3[None, None, :], dim=2)
+
+    def _time_derivative(self, t):
+        t_flat = t.reshape(-1)
+
+        def single_forward(t_scalar):
+            return self.forward(t_scalar.reshape(1, 1)).squeeze(0)
+
+        return vmap(jacrev(single_forward))(t_flat)
      
     def physics_loss(self,t):
         x_pred = self.forward(t)
-        dx_dt_pred = torch.zeros_like(x_pred)
-        for i in range(x_pred.shape[1]):
-            grad_i = torch.autograd.grad(x_pred[:, i].sum(), t, create_graph=True, retain_graph=True)[0]
-            dx_dt_pred[:, i] = grad_i.squeeze(-1)
+        dx_dt_pred = self._time_derivative(t)
 
         N = self.N
         x_old = x_pred[:, 0:N]

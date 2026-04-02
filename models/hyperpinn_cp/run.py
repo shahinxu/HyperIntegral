@@ -86,14 +86,6 @@ def main():
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--tmax", type=float, default=20.0)
     parser.add_argument("--cp_rank", type=int, default=16)
-    parser.add_argument("--initial_rank", type=int, default=4)
-    parser.add_argument("--adaptive_rank_interval", type=int, default=500)
-    parser.add_argument("--adaptive_rank_window", type=int, default=200)
-    parser.add_argument("--adaptive_rank_plateau_tol", type=float, default=0.02)
-    parser.add_argument("--adaptive_rank_prune_sv_ratio", type=float, default=1e-2)
-    parser.add_argument("--adaptive_rank_min", type=int, default=2)
-    parser.add_argument("--adaptive_rank_grow_step", type=int, default=1)
-    parser.add_argument("--disable_adaptive_rank", action="store_true")
     parser.add_argument("--n_trajectories", type=int, default=1)
     parser.add_argument("--results_root", type=str, default="results/hyperpinn_cp")
     parser.add_argument("--python", type=str, default=None)
@@ -135,27 +127,11 @@ def main():
         str(args.tmax),
         "--cp_rank",
         str(args.cp_rank),
-        "--initial_rank",
-        str(args.initial_rank),
         "--epochs",
         str(args.n_epochs),
         "--lr",
         str(args.lr),
-        "--adaptive_rank_interval",
-        str(args.adaptive_rank_interval),
-        "--adaptive_rank_window",
-        str(args.adaptive_rank_window),
-        "--adaptive_rank_plateau_tol",
-        str(args.adaptive_rank_plateau_tol),
-        "--adaptive_rank_prune_sv_ratio",
-        str(args.adaptive_rank_prune_sv_ratio),
-        "--adaptive_rank_min",
-        str(args.adaptive_rank_min),
-        "--adaptive_rank_grow_step",
-        str(args.adaptive_rank_grow_step),
     ]
-    if args.disable_adaptive_rank:
-        cmd.append("--disable_adaptive_rank")
     if effective_n_nodes is not None:
         cmd.extend(["--N", str(effective_n_nodes)])
 
@@ -192,7 +168,6 @@ def main():
             "noise": args.noise,
             "tmax": args.tmax,
             "cp_rank": args.cp_rank,
-            "initial_rank": args.initial_rank,
             "n_epochs": args.n_epochs,
             "lr": args.lr,
         },

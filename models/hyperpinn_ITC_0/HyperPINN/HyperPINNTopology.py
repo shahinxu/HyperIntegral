@@ -1,6 +1,10 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+try:
+    from torch.func import jacrev, vmap
+except ImportError:
+    from functorch import jacrev, vmap
 
 
 class ResidualBlock(nn.Module):
@@ -225,32 +229,6 @@ class HyperPINNTopology(nn.Module):
         rank_products = selected.prod(dim=1)
         return (rank_products * lam.unsqueeze(0)).sum(dim=1)
 
-    def completion_loss(self, observed_trajectory, observed_samples):
-        total_loss = torch.tensor(0.0, device=next(self.parameters()).device)
-        stats = {
-            "completion_edges": 0.0,
-            "completion_triangles": 0.0,
-        }
-
-        edge_batch = observed_samples.get("edges")
-        if edge_batch is not None and edge_batch["indices"].numel() > 0:
-            edge_logits = self.score_order_edges("edges", edge_batch["indices"], observed_trajectory, one_based=True)
-            edge_labels = edge_batch["labels"].to(edge_logits.device)
-            edge_loss = F.binary_cross_entropy_with_logits(edge_logits, edge_labels)
-            total_loss = total_loss + edge_loss
-            stats["completion_edges"] = float(edge_loss.detach().cpu())
-
-        if self.max_order >= 3:
-            tri_batch = observed_samples.get("triangles")
-            if tri_batch is not None and tri_batch["indices"].numel() > 0:
-                tri_logits = self.score_order_edges("triangles", tri_batch["indices"], observed_trajectory, one_based=True)
-                tri_labels = tri_batch["labels"].to(tri_logits.device)
-                tri_loss = F.binary_cross_entropy_with_logits(tri_logits, tri_labels)
-                total_loss = total_loss + tri_loss
-                stats["completion_triangles"] = float(tri_loss.detach().cpu())
-
-        return total_loss, stats
-
     def sparsity_regularization(self, observed_trajectory):
         u2, lam2 = self._itc_factors(2, observed_trajectory)
         s1_2 = torch.sum(u2, dim=0)
@@ -322,12 +300,17 @@ class HyperPINNTopology(nn.Module):
         inner = a_tilde * b_tilde - d_tilde - x_i_cu * (c_tilde * c_tilde - e_tilde)
         return torch.sum(inner * ui * lam3[None, None, :], dim=2)
 
+    def _time_derivative(self, t):
+        t_flat = t.reshape(-1)
+
+        def single_forward(t_scalar):
+            return self.forward(t_scalar.reshape(1, 1)).squeeze(0)
+
+        return vmap(jacrev(single_forward))(t_flat)
+
     def physics_loss(self, t, observed_trajectory):
         x_pred = self.forward(t)
-        dx_dt_pred = torch.zeros_like(x_pred)
-        for i in range(x_pred.shape[1]):
-            grad_i = torch.autograd.grad(x_pred[:, i].sum(), t, create_graph=True, retain_graph=True)[0]
-            dx_dt_pred[:, i] = grad_i.squeeze(-1)
+        dx_dt_pred = self._time_derivative(t)
 
         N = self.N
         x_old = x_pred[:, 0:N]

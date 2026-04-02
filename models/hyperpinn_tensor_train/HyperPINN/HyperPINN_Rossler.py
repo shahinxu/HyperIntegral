@@ -1,6 +1,5 @@
 import os
 import sys
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -29,17 +28,9 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
 parser.add_argument('--max_order', type=int, default=3, choices=[2, 3])
 parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--noise', type=float, default=0.0)
-parser.add_argument('--tt_rank', type=int, default=8)
-parser.add_argument('--initial_rank', type=int, default=4)
+parser.add_argument('--tt_rank', type=int, default=16)
 parser.add_argument('--epochs', type=int, default=14000)
 parser.add_argument('--lr', type=float, default=5e-4)
-parser.add_argument('--adaptive_rank_interval', type=int, default=500)
-parser.add_argument('--adaptive_rank_window', type=int, default=200)
-parser.add_argument('--adaptive_rank_plateau_tol', type=float, default=0.02)
-parser.add_argument('--adaptive_rank_prune_sv_ratio', type=float, default=1e-2)
-parser.add_argument('--adaptive_rank_min', type=int, default=2)
-parser.add_argument('--adaptive_rank_grow_step', type=int, default=1)
-parser.add_argument('--disable_adaptive_rank', action='store_true')
 args = parser.parse_args()
 
 N = args.N
@@ -183,7 +174,6 @@ model = HyperPINNTopology(
     use_pirate=use_pirate,
     max_order=max_order,
     tt_rank=tt_rank,
-    initial_active_rank=args.initial_rank,
 )
 model = model.to(device)
 
@@ -199,19 +189,6 @@ stage1_epochs = 2500
 stage2_epochs = 10000
 adaptive_weights = True
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-
-
-def detect_loss_plateau(loss_buffer, window, rel_tol):
-    if len(loss_buffer) < 2 * window:
-        return False, float('nan')
-    values = np.array(loss_buffer, dtype=np.float64)
-    prev_mean = float(values[-2 * window:-window].mean())
-    curr_mean = float(values[-window:].mean())
-    rel_improve = (prev_mean - curr_mean) / (abs(prev_mean) + 1e-12)
-    return rel_improve < rel_tol, rel_improve
-
-
-loss_window = deque(maxlen=max(2 * args.adaptive_rank_window, args.adaptive_rank_interval + 1))
 
 
 def get_labels_and_scores(all_edges, true_edges, probs):
@@ -314,27 +291,7 @@ for epoch in range(epochs):
     optimizer.step()
     scheduler.step()
     losses.append(total_loss.item())
-    loss_window.append(total_loss.item())
     sparsity_stats.append(sparsity_info)
-
-    if (not args.disable_adaptive_rank) and epoch > 0 and epoch % args.adaptive_rank_interval == 0:
-        plateau, rel_improve = detect_loss_plateau(
-            loss_window,
-            max(1, args.adaptive_rank_window),
-            args.adaptive_rank_plateau_tol,
-        )
-        adapt_info = model.adapt_rank(
-            loss_plateau=plateau,
-            min_rank=args.adaptive_rank_min,
-            grow_step=args.adaptive_rank_grow_step,
-            prune_sv_ratio=args.adaptive_rank_prune_sv_ratio,
-        )
-        if adapt_info['changed']:
-            rel_str = 'n/a' if np.isnan(rel_improve) else f'{rel_improve:.3e}'
-            print(f"  [RankAdapt] epoch={epoch} plateau={plateau} rel_improve={rel_str}")
-            for event in adapt_info['events']:
-                print(f"  [RankAdapt] {event}")
-            print(f"  [RankAdapt] active={adapt_info['active']}")
 
     if epoch % 500 == 0:
         topo_grad_norm, topo_param_norm, grad_parts, param_parts = summarize_topology_stats(model)
@@ -350,7 +307,6 @@ for epoch in range(epochs):
         print(f'  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}')
         print(f"  Topology grad detail: {', '.join(grad_parts)}")
         print(f"  Topology param detail: {', '.join(param_parts)}")
-        print(f"  Active ranks: {model.get_active_ranks()}")
 
         with torch.no_grad():
             X_pred = model.forward(t_data).cpu().numpy()
