@@ -20,6 +20,9 @@ class HypergraphModel:
             "n32": "rossler_oscillator_n32_hypergraph.json",
             "n64": "rossler_oscillator_n64_hypergraph.json",
             "n100": "rossler_oscillator_n100_hypergraph.json",
+            "n300": "rossler_oscillator_n300_hypergraph.json",
+            "n500": "rossler_oscillator_n500_hypergraph.json",
+            "n1000": "rossler_oscillator_n1000_hypergraph.json",
         }
         if preset_name not in preset_map:
             raise ValueError(f"Unsupported Rossler hypergraph preset: {preset}")

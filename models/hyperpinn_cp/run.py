@@ -28,6 +28,9 @@ ROSSLER_PRESETS = {
     "n32": {"preset": "n32", "n_nodes": 32},
     "n64": {"preset": "n64", "n_nodes": 64},
     "n100": {"preset": "n100", "n_nodes": 100},
+    "n300": {"preset": "n300", "n_nodes": 300},
+    "n500": {"preset": "n500", "n_nodes": 500},
+    "n1000": {"preset": "n1000", "n_nodes": 1000},
 }
 
 

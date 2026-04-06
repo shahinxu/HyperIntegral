@@ -254,49 +254,36 @@ for epoch in range(epochs):
     x_pred = model.forward(t_data)
     physics_loss = model.physics_loss(t_data)
     data_loss = torch.mean((x_pred - x_data) ** 2)
-    sparsity_loss, sparsity_info = model.sparsity_regularization()
-
-    if adaptive_weights and epoch > 500:
-        sparsity_weight = max(0.1, 1.0 * (0.99 ** (epoch - 500)))
-    else:
-        sparsity_weight = 1.0
 
     if epoch < stage1_epochs:
         physics_weight = 0.1
         data_weight = 1.0
-        sparsity_weight = 0.0
+        print_prefix = "Stage 1 (Data Fitting)"
     elif epoch < stage2_epochs:
         progress = (epoch - stage1_epochs) / (stage2_epochs - stage1_epochs)
         physics_weight = 0.01 + 0.99 * progress
         data_weight = 1.0 - 0.8 * progress
-        sparsity_weight = 0.0
+        print_prefix = "Stage 2 (Physics Learning)"
     else:
         progress = min(1.0, (epoch - stage2_epochs) / (epochs - stage2_epochs))
         physics_weight = 1.0
         data_weight = 0.2
-        sparsity_weight = 0.01 * progress
         if hasattr(model, 'temperature'):
             model.temperature = max(0.5, 1.0 * (0.995 ** ((epoch - stage2_epochs) // 100)))
+        print_prefix = "Stage 3 (Physics Focus)"
 
-    total_loss = physics_weight * physics_loss + data_weight * data_loss + sparsity_weight * sparsity_loss
+    total_loss = physics_weight * physics_loss + data_weight * data_loss
     total_loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
     scheduler.step()
     losses.append(total_loss.item())
-    sparsity_stats.append(sparsity_info)
 
     if epoch % 500 == 0:
         topo_grad_norm, topo_param_norm, grad_parts, param_parts = summarize_topology_stats(model)
         print(f"\n{'=' * 80}")
-        print(f'Epoch {epoch}, Total Loss: {total_loss.item():.6f}')
+        print(f"{print_prefix} | Epoch {epoch}, Total Loss: {total_loss.item():.6f}")
         print(f'  Physics: {physics_loss.item():.6f}, Data: {data_loss.item():.6f}')
-        print(f'  Sparsity: {sparsity_loss.item():.6f}')
-        print(
-            f"  L1 edges: {sparsity_info['l1_edges']:.2f},"
-            f"  L1 triangles: {sparsity_info['l1_triangles']:.2f},"
-            f"  Factor penalty: {sparsity_info['l1_tucker_factor_penalty']:.6f}"
-        )
         print(f'  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}')
         print(f"  Topology grad detail: {', '.join(grad_parts)}")
         print(f"  Topology param detail: {', '.join(param_parts)}")

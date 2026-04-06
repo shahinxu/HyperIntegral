@@ -231,8 +231,6 @@ def main():
         max_order=max_order,
         itc_rank=args.itc_rank,
     ).to(device)
-    model.lambda_l1_edges = 0.03
-    model.lambda_l1_triangles = 0.05
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
@@ -250,37 +248,31 @@ def main():
         x_pred = model.forward(t_data)
         data_loss = torch.mean((x_pred - x_data) ** 2)
         physics_loss = model.physics_loss(t_data, x_data)
-        sparsity_loss, sparsity_info = model.sparsity_regularization(x_data)
 
         if epoch < stage1_epochs:
             data_weight = 1.0
             physics_weight = 0.1
-            sparsity_weight = 0.0
             print_prefix = "Stage 1 (Data Fitting)"
         elif epoch < stage2_epochs:
             progress = (epoch - stage1_epochs) / (stage2_epochs - stage1_epochs)
             data_weight = 1.0
             physics_weight = 0.1 * progress
-            sparsity_weight = 0.0
             print_prefix = "Stage 2 (Physics Warmup)"
         else:
             progress = min(1.0, (epoch - stage2_epochs) / max(1, args.epochs - stage2_epochs))
             data_weight = 1.0 - 0.8 * progress
             physics_weight = 0.1 + 0.9 * progress
-            sparsity_weight = 0.01 * progress
-            print_prefix = "Stage 3 (Physics + Sparsity)"
+            print_prefix = "Stage 3 (Physics Focus)"
 
         total_loss = (
             data_weight * data_loss
             + physics_weight * physics_loss
-            + sparsity_weight * sparsity_loss
         )
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
         losses.append(total_loss.item())
-        sparsity_stats.append(sparsity_info)
 
         if epoch % 500 == 0:
             topo_grad_norm, topo_param_norm, grad_parts, param_parts = summarize_topology_stats(model)
@@ -288,12 +280,7 @@ def main():
             print(f"{print_prefix} | Epoch {epoch}, Total Loss: {total_loss.item():.6f}")
             print(
                 f"  Data: {data_loss.item():.6f}, "
-                f"Physics: {physics_loss.item():.6f}, Sparsity: {sparsity_loss.item():.6f}"
-            )
-            print(
-                f"  L1 edges: {sparsity_info['l1_edges']:.2f}, "
-                f"L1 triangles: {sparsity_info['l1_triangles']:.2f}, "
-                f"Factor penalty: {sparsity_info['l2_factor_penalty']:.6f}"
+                f"Physics: {physics_loss.item():.6f}"
             )
             print(f"  Topology grad norm: {topo_grad_norm:.3e} | param norm: {topo_param_norm:.3e}")
             print(f"  Topology grad detail: {', '.join(grad_parts)}")

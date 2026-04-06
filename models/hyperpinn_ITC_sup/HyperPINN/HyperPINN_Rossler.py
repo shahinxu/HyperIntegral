@@ -308,8 +308,6 @@ def main():
         max_order=max_order,
         itc_rank=args.itc_rank,
     ).to(device)
-    model.lambda_l1_edges = 0.03
-    model.lambda_l1_triangles = 0.05
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)

@@ -2,6 +2,10 @@ import torch
 from torch import nn
 from torch import optim as optim
 from itertools import combinations
+try:
+    from torch.func import jacrev, vmap
+except ImportError:
+    from functorch import jacrev, vmap
 
 
 class ResidualBlock(nn.Module):
@@ -362,13 +366,18 @@ class HyperPINNTopology(nn.Module):
             'l0_sexts': l0_sexts.item() if isinstance(l0_sexts, torch.Tensor) else l0_sexts,
             'l0_septs': l0_septs.item() if isinstance(l0_septs, torch.Tensor) else l0_septs
         }
+
+    def _time_derivative(self, t):
+        t_flat = t.reshape(-1)
+
+        def single_forward(t_scalar):
+            return self.forward(t_scalar.reshape(1, 1)).squeeze(0)
+
+        return vmap(jacrev(single_forward))(t_flat)
      
     def physics_loss(self,t):
         x_pred = self.forward(t)
-        dx_dt_pred = torch.zeros_like(x_pred)
-        for i in range(x_pred.shape[1]):
-            grad_i = torch.autograd.grad(x_pred[:, i].sum(), t, create_graph=True, retain_graph=True)[0]
-            dx_dt_pred[:, i] = grad_i.squeeze(-1)
+        dx_dt_pred = self._time_derivative(t)
 
         N = self.N
         x_old = x_pred[:, 0:N]
