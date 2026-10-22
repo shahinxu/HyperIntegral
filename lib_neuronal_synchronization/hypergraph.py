@@ -661,7 +661,11 @@ class HypergraphModel:
     @staticmethod
     def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
         inferred_n_nodes = HypergraphModel._edge_config_n_nodes(edge_config)
-        params = HypergraphModel.SimplicialParams(n_oscillators=inferred_n_nodes or n_nodes, n_steps=n_samples)
+        params = HypergraphModel.SimplicialParams(
+            n_oscillators=inferred_n_nodes or n_nodes,
+            n_steps=n_samples,
+            seed=int(os.getenv("HG_DATA_SEED", "42")),
+        )
         edges = np.array(edge_config.get("edges", []), dtype=int) - 1
         triangles = np.array(edge_config.get("triangles", []), dtype=int) - 1
         quads = np.array(edge_config.get("quads", []), dtype=int) - 1 if len(edge_config.get("quads", [])) > 0 else np.empty((0, 4), dtype=int)

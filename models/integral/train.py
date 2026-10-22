@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 from itertools import combinations
+from math import comb
 import os
 from datetime import datetime
 from tqdm import tqdm
@@ -20,6 +21,58 @@ from hypergraph.scene_registry import get_scene_model
 from hypergraph.outputs import write_standard_summary
 
 HypergraphModel = None
+
+
+def set_global_seed(seed: int):
+    """Seed every RNG that can influence a run (data gen, init, batching)."""
+    import random
+    # Scene libraries read this to seed the ODE initial condition / parameter
+    # draws, so a seed sweep varies the trajectory, not just the optimizer.
+    os.environ["HG_DATA_SEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def macro_auc(auc_scores: dict):
+    vals = [v for v in auc_scores.values() if v is not None]
+    return float(np.mean(vals)) if vals else None
+
+
+def build_order_blocks(orderwise_support: dict):
+    """Return [(order_num, start_idx, end_idx), ...] over the flattened A vector."""
+    blocks = []
+    idx = 0
+    for order_num, key in ((2, 'edges'), (3, 'triangles'), (4, 'quads'), (5, 'quints')):
+        n = len(orderwise_support.get(key, []))
+        if n > 0:
+            blocks.append((order_num, idx, idx + n))
+            idx += n
+    return blocks
+
+
+def staged_lambda_vector(epoch, n_epochs, blocks, n_hyperedges, device, schedule="none"):
+    """Order-wise staged lambda: low orders are enabled first, higher orders
+    are faded in over successive stages. schedule='none' -> all-ones."""
+    lam = torch.ones(n_hyperedges, device=device)
+    if schedule == "none" or len(blocks) <= 1:
+        return lam
+    n_stages = len(blocks)
+    # Stage s owns the epoch window [s/n_stages, (s+1)/n_stages); within its
+    # window the corresponding order ramps linearly from 0 to 1.
+    prog = (epoch + 1) / max(1, n_epochs)
+    for s, (order_num, lo, hi) in enumerate(blocks):
+        start = s / n_stages
+        end = (s + 1) / n_stages
+        if prog <= start:
+            w = 0.0
+        elif prog >= end:
+            w = 1.0
+        else:
+            w = (prog - start) / (end - start)
+        lam[lo:hi] = w
+    return lam
 class ResidualBlock(nn.Module):
     def __init__(self, hidden_dim, dropout=0.0):
         super().__init__()
@@ -76,6 +129,47 @@ def build_orderwise_support(n_nodes: int, max_order: int) -> dict:
     for order in range(2, max_order + 1):
         key = order_to_key[order]
         support[key] = [list(edge) for edge in combinations(range(1, n_nodes + 1), order)]
+    return support
+
+
+def build_orderwise_support_sampled(n_nodes: int, max_order: int, max_per_order: int,
+                                    edge_config: dict, seed: int = 0) -> dict:
+    """Candidate support with the negatives subsampled, per order.
+
+    The full support is C(n, o) summed over orders, which is about 6e6 for
+    n = 60 and order 5 -- far too large to materialize, let alone to hold a
+    dense Phi for.  Every true hyperedge is kept, and the negatives are
+    subsampled uniformly at random.  AUC computed against a uniform random
+    sample of the negatives is an unbiased estimate of AUC against all of
+    them, so the metric stays comparable to the full-support runs.
+    """
+    import random as _random
+    order_to_key = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
+    rng = _random.Random(seed)
+    support = {k: [] for k in order_to_key.values()}
+    max_order = min(max_order, 5)
+
+    for order in range(2, max_order + 1):
+        key = order_to_key[order]
+        total = comb(n_nodes, order)
+        true_edges = {tuple(sorted(int(v) for v in e)) for e in edge_config.get(key, [])}
+
+        if max_per_order <= 0 or total <= max_per_order:
+            chosen = [tuple(e) for e in combinations(range(1, n_nodes + 1), order)]
+        else:
+            # Rejection-sample distinct sorted tuples; cheap because the number
+            # drawn is many orders of magnitude below the total.
+            seen = set(true_edges)
+            chosen = list(true_edges)
+            n_neg = max(0, max_per_order - len(true_edges))
+            while len(chosen) < len(true_edges) + n_neg:
+                cand = tuple(sorted(rng.sample(range(1, n_nodes + 1), order)))
+                if cand in seen:
+                    continue
+                seen.add(cand)
+                chosen.append(cand)
+            chosen.sort()
+        support[key] = [list(e) for e in chosen]
     return support
 
 
@@ -281,11 +375,47 @@ def train_integral_model(
     n_trajectories: int = 1,
     results_root: str = "results/integral",
     scene_label: str = "unknown",
+    seed: int = 42,
+    loss_mode: str = "integral",
+    bounded: bool = True,
+    lambda_schedule: str = "none",
+    n_intervals: int | None = None,
+    window_frac: float = 1.0,
+    l1_weight: float = 0.0,
+    run_tag: str | None = None,
+    oracle_regressor: bool = False,
+    no_resample: bool = False,
+    max_candidates_per_order: int = 0,
 ):
     device = torch.device(f'cuda:{gpu_id}' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    set_global_seed(seed)
+    if n_intervals is None:
+        n_intervals = batch_size
+    print(
+        f"[config] seed={seed} loss_mode={loss_mode} bounded={bounded} "
+        f"lambda_schedule={lambda_schedule} n_intervals={n_intervals} "
+        f"window_frac={window_frac} l1={l1_weight} "
+        f"oracle_regressor={oracle_regressor} no_resample={no_resample}"
+    )
+
+    def _make_save_dir():
+        tag = run_tag if run_tag else datetime.now().strftime("%Y%m%d_%H%M%S")
+        d = os.path.join(
+            results_root,
+            scene_label,
+            f"sample_{n_samples}_noise_{noise}",
+            tag,
+        )
+        os.makedirs(d, exist_ok=True)
+        return d
     edge_config = HypergraphModel.get_hyperedge_config(N, max_order)
-    orderwise_support = build_orderwise_support(N, max_order)
+    if max_candidates_per_order and max_candidates_per_order > 0:
+        orderwise_support = build_orderwise_support_sampled(
+            N, max_order, max_candidates_per_order, edge_config, seed=seed)
+        print(f"[config] candidate negatives subsampled to <= {max_candidates_per_order} per order")
+    else:
+        orderwise_support = build_orderwise_support(N, max_order)
     order_keys = ['edges', 'triangles', 'quads', 'quints']
     order_sizes = {
         'edges': 2,
@@ -314,6 +444,7 @@ def train_integral_model(
     is_discrete_social = "lib_social_contagion" in model_module
 
     # --- Data generation: single vs multi-trajectory ---
+    x_clean = None
     if is_discrete_social and n_trajectories > 1:
         print(f"Using social contagion model with {n_trajectories} independent trajectories on the same hypergraph...")
         traj_t_list = []
@@ -334,13 +465,7 @@ def train_integral_model(
             print(f"Added Gaussian noise with std={noise}")
         # For simplicity, in multi-trajectory mode we skip extra linear
         # resampling and work directly on the native ODE grid.
-        save_dir = os.path.join(
-            results_root,
-            scene_label,
-            f"sample_{n_samples}_noise_{noise}",
-            datetime.now().strftime("%Y%m%d_%H%M%S"),
-        )
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir = _make_save_dir()
         # Targets are the original 0/1 observations; inputs can be smoothed.
         x_target = x_data_multi.copy()
         # Temporal smoothing per trajectory to reduce Bernoulli noise.
@@ -355,14 +480,26 @@ def train_integral_model(
         x_data = x_smooth  # [K, T, N, D]
     else:
         # Original single-trajectory path
-        t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, noise=noise)
+        gen_kwargs = {"noise": noise}
+        if "seed" in inspect.signature(HypergraphModel.generate_training_data).parameters:
+            gen_kwargs["seed"] = seed
+        t_data, x_data = HypergraphModel.generate_training_data(N, edge_config, n_samples, **gen_kwargs)
+        # Oracle study: the same trajectory without observation noise.  Used to
+        # build Phi and f while the residual left-hand side still sees the noisy
+        # observations, isolating errors-in-variables in the regressor from
+        # noise in the derivative/increment being matched.
+        x_clean = None
+        if oracle_regressor:
+            clean_kwargs = dict(gen_kwargs)
+            clean_kwargs["noise"] = 0.0
+            _, x_clean = HypergraphModel.generate_training_data(N, edge_config, n_samples, **clean_kwargs)
         n_times = len(t_data)
         print(f"Data shape: {x_data.shape}, Time points: {n_times}")
         state_dim = x_data.shape[2]
         if noise > 0:
             print(f"Added Gaussian noise with std={noise}")
 
-        if use_nn and not is_discrete_social:
+        if use_nn and not is_discrete_social and not no_resample:
             print("\n" + "="*80)
             print("LINEAR INTERPOLATION MODE: Using piecewise linear curves")
             print("="*80)        
@@ -385,6 +522,15 @@ def train_integral_model(
                                           kind='linear', fill_value='extrapolate')
                     x_data_resampled[:, node_idx, coord_idx] = interp_func(t_data_resampled)
             
+            if x_clean is not None:
+                x_clean_resampled = np.zeros((n_resampled, N, state_dim))
+                for node_idx in range(N):
+                    for coord_idx in range(state_dim):
+                        fc = interp1d(t_data, x_clean[:, node_idx, coord_idx],
+                                      kind='linear', fill_value='extrapolate')
+                        x_clean_resampled[:, node_idx, coord_idx] = fc(t_data_resampled)
+                x_clean = x_clean_resampled
+
             print(f"Linear interpolation completed!")
             
             x_data_resampled_cpu = x_data_resampled
@@ -413,14 +559,7 @@ def train_integral_model(
                         ax.legend(fontsize=9)
             
             plt.tight_layout()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_dir = os.path.join(
-                results_root,
-                scene_label,
-                f"sample_{n_samples}_noise_{noise}",
-                timestamp,
-            )
-            os.makedirs(save_dir, exist_ok=True)
+            save_dir = _make_save_dir()
             plt.savefig(os.path.join(save_dir, 'linear_vs_original.png'), dpi=150, bbox_inches='tight')
             plt.close()
             print(f"Comparison plot saved to {os.path.join(save_dir, 'linear_vs_original.png')}")
@@ -446,6 +585,9 @@ def train_integral_model(
             n_times = n_resampled
             print(f"\nReplaced data with resampled version: {x_data.shape}")
             print("="*80 + "\n")
+        elif use_nn and no_resample:
+            print("no_resample=True: staying on the native observation grid "
+                  f"({n_times} points), so the finite-difference step is the raw dt.")
         elif use_nn and is_discrete_social:
             print("Skipping linear interpolation for discrete social contagion data; using native observation grid.")
 
@@ -461,23 +603,27 @@ def train_integral_model(
                 x_smooth[t_idx] = x_padded[t_idx:t_idx + window].mean(axis=0)
             x_data = x_smooth
         # Set up a default save_dir for this run
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_dir = os.path.join(
-            results_root,
-            scene_label,
-            f"sample_{n_samples}_noise_{noise}",
-            timestamp,
-        )
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir = _make_save_dir()
 
     print("Transferring data to GPU...")
     t_data_gpu = torch.tensor(t_data, dtype=torch.float32, device=device)
+    # x_reg feeds Phi and f; x_data feeds the residual's left-hand side.
+    # They differ only under oracle_regressor.
+    x_reg = x_data
+    if oracle_regressor:
+        if x_clean is None:
+            raise RuntimeError("oracle_regressor requires a clean trajectory; "
+                               "it is only supported in single-trajectory mode.")
+        x_reg = x_clean
+        print("ORACLE REGRESSOR: Phi and f are built from the noise-free trajectory.")
     if is_discrete_social and n_trajectories > 1:
         x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [K, T, N, D]
         x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [K, T, N, D]
     else:
         x_data_gpu = torch.tensor(x_data, dtype=torch.float32, device=device)       # [T, N, D]
         x_target_gpu = torch.tensor(x_target, dtype=torch.float32, device=device)   # [T, N, D]
+    x_reg_gpu = (x_data_gpu if not oracle_regressor
+                 else torch.tensor(x_reg, dtype=torch.float32, device=device))
     print("Converting hyperedge indices to GPU tensors...")
     all_possible_edges_gpu = {}
     for key in order_keys:
@@ -510,7 +656,7 @@ def train_integral_model(
                     f_all[k, t_idx] = HypergraphModel.dynamic_f(x_t, N)
     else:
         for t_idx in tqdm(range(n_times), desc="Precomputing Phi", leave=False):
-            x_t = x_data_gpu[t_idx]
+            x_t = x_reg_gpu[t_idx]
             Phi_all[t_idx] = HypergraphModel.dynamic_phi(
                 x_t, all_possible_edges_gpu, N, device
             )
@@ -542,6 +688,14 @@ def train_integral_model(
     
     optimizer = optim.Adam([A], lr=lr)
 
+    order_blocks = build_order_blocks(orderwise_support)
+    # Maximum interval length used by the integral residual, as a fraction of
+    # the full observation window. window_frac=1.0 reproduces the original
+    # "any random pair of time points" behaviour.
+    max_window = max(1, int(round(window_frac * (n_times - 1))))
+    if loss_mode == "integral":
+        print(f"[config] max integral window = {max_window} steps of {n_times - 1}")
+
     # use_discrete_residual is true exactly for the social contagion
     # model, where observations are 0/1 and we use a Bernoulli-style
     # likelihood rather than an MSE on x.
@@ -551,6 +705,13 @@ def train_integral_model(
     pbar = tqdm(range(n_epochs), desc="Training Progress", ncols=120)
     for epoch in pbar:
         optimizer.zero_grad()
+
+        # Order-wise staged lambda schedule (ablation). lam is all-ones when
+        # lambda_schedule == "none", which recovers the un-staged objective.
+        lam = staged_lambda_vector(
+            epoch, n_epochs, order_blocks, n_hyperedges, device, lambda_schedule
+        )
+        A_eff = A.squeeze(-1) * lam                                      # [E]
 
         if use_discrete_residual:
             # Discrete-time Bernoulli likelihood on Euler-step probabilities.
@@ -563,7 +724,7 @@ def train_integral_model(
                 dt_view = dt_all.view(1, -1, 1, 1)
                 f_curr = f_all[:, :-1]              # [K, T-1, N, D]
                 Phi_curr = Phi_all[:, :-1]          # [K, T-1, N, D, E]
-                PhiA_curr = torch.einsum('ktnie,el->ktni', Phi_curr, A)  # [K, T-1, N, D]
+                PhiA_curr = torch.einsum('ktnie,e->ktni', Phi_curr, A_eff)  # [K, T-1, N, D]
                 incr_pred = dt_view * (f_curr + PhiA_curr)
                 p_next = x_curr + incr_pred
             else:
@@ -573,7 +734,7 @@ def train_integral_model(
                 dt_view = dt_all.view(-1, 1, 1)   # [T-1, 1, 1]
                 f_curr = f_all[:-1]               # [T-1, N, D]
                 Phi_curr = Phi_all[:-1]           # [T-1, N, D, E]
-                PhiA_curr = torch.einsum('tnie,el->tni', Phi_curr, A)  # [T-1, N, D]
+                PhiA_curr = torch.einsum('tnie,e->tni', Phi_curr, A_eff)  # [T-1, N, D]
                 incr_pred = dt_view * (f_curr + PhiA_curr)
                 p_next = x_curr + incr_pred
 
@@ -581,35 +742,62 @@ def train_integral_model(
             # Binary cross-entropy: -[y log p + (1-y) log(1-p)]
             bce = -(y_next * torch.log(p_next) + (1.0 - y_next) * torch.log(1.0 - p_next))
             total_loss = bce.mean()
+        elif loss_mode == "derivative":
+            # Ablation: collocation-style derivative residual
+            #   dx/dt - f(x) - Phi(x) A = 0
+            # with dx/dt from central finite differences, evaluated on
+            # n_intervals randomly sampled interior collocation points.
+            # Same A parametrization and same architecture as the integral
+            # variant, so the only thing that changes is the residual operator.
+            idx = np.random.choice(np.arange(1, n_times - 1), size=min(n_intervals, n_times - 2), replace=False)
+            idx_t = torch.as_tensor(idx, dtype=torch.long, device=device)
+            dx = x_data_gpu[idx_t + 1] - x_data_gpu[idx_t - 1]            # [B, N, D]
+            dt2 = (t_data_gpu[idx_t + 1] - t_data_gpu[idx_t - 1]).view(-1, 1, 1)
+            dxdt = dx / dt2                                               # [B, N, D]
+            f_c = f_all[idx_t]                                            # [B, N, D]
+            Phi_c = Phi_all[idx_t]                                        # [B, N, D, E]
+            PhiA_c = torch.einsum('bnie,e->bni', Phi_c, A_eff)
+            residual = dxdt - f_c - PhiA_c
+            total_loss = torch.mean(residual ** 2)
         else:
-            # Original integral formulation over random time intervals
-            losses = []
-            for _ in range(batch_size):
-                idx_i, idx_j = np.random.choice(n_times, size=2, replace=False)
-                if idx_i > idx_j:
-                    idx_i, idx_j = idx_j, idx_i
+            # Integral formulation over random time intervals (ours).
+            # Vectorized over n_intervals sampled windows; window length is
+            # capped by max_window (ablation on integral window length).
+            starts = np.random.randint(0, n_times - 1, size=n_intervals)
+            lengths = np.random.randint(1, max_window + 1, size=n_intervals)
+            ends = np.minimum(starts + lengths, n_times - 1)
+            keep = ends > starts
+            starts, ends = starts[keep], ends[keep]
 
-                x_i, x_j = x_data_gpu[idx_i], x_data_gpu[idx_j]  # [N, D]
+            # Cumulative integrals let every window be evaluated in O(1).
+            w = dt_all.view(-1, 1, 1)                                     # [T-1, 1, 1]
+            cum_f = torch.cumsum(f_all[:-1] * w, dim=0)                   # [T-1, N, D]
+            PhiA_all = torch.einsum('tnie,e->tni', Phi_all[:-1], A_eff)   # [T-1, N, D]
+            cum_phiA = torch.cumsum(PhiA_all * w, dim=0)                  # [T-1, N, D]
+            zero = torch.zeros(1, N, state_dim, device=device, dtype=cum_f.dtype)
+            cum_f = torch.cat([zero, cum_f], dim=0)                       # [T, N, D]
+            cum_phiA = torch.cat([zero, cum_phiA], dim=0)                 # [T, N, D]
 
-                lhs = x_j - x_i  # [N, D]
-                f_interval = f_all[idx_i:idx_j]  # [idx_j-idx_i, N, D]
-                Phi_interval = Phi_all[idx_i:idx_j]  # [idx_j-idx_i, N, D, n_hyperedges]
-                dt_interval = dt_all[idx_i:idx_j]  # [idx_j-idx_i]
-                integral_f = torch.einsum('tni,t->ni', f_interval, dt_interval)  # [N, D]
-                Phi_A_interval = torch.einsum('tnie,el->tni', Phi_interval, A)  # [t, N, D]
-                integral_phi_A = torch.einsum('tni,t->ni', Phi_A_interval, dt_interval)  # [N, D]
+            si = torch.as_tensor(starts, dtype=torch.long, device=device)
+            ei = torch.as_tensor(ends, dtype=torch.long, device=device)
+            lhs = x_data_gpu[ei] - x_data_gpu[si]                         # [B, N, D]
+            integral_f = cum_f[ei] - cum_f[si]
+            integral_phi_A = cum_phiA[ei] - cum_phiA[si]
 
-                residual = lhs - integral_f - integral_phi_A
-                loss = torch.mean(residual ** 2)
-                losses.append(loss)
+            residual = lhs - integral_f - integral_phi_A
+            total_loss = torch.mean(residual ** 2)
 
-            total_loss = torch.mean(torch.stack(losses))
+        if l1_weight > 0:
+            total_loss = total_loss + l1_weight * A.abs().mean()
 
         total_loss.backward()
         optimizer.step()
 
-        with torch.no_grad():
-            A.clamp_(-2.0, 2.0)
+        if bounded:
+            # Bounded tensor parametrization: hard box constraint on the
+            # interaction tensor entries. Ablating this removes the box.
+            with torch.no_grad():
+                A.clamp_(-2.0, 2.0)
 
         pbar.set_postfix({
             'loss': f'{total_loss.item():.6f}'
@@ -646,7 +834,7 @@ def train_integral_model(
                     print(f"  {order_label}: N/A | Support={n_support}, True={n_true}")
             print('='*60 + '\n')
     
-    return A.detach().cpu().numpy(), edge_config, save_dir
+    return A.detach().cpu().numpy(), edge_config, save_dir, orderwise_support
 
 
 if __name__ == "__main__":
@@ -662,8 +850,41 @@ if __name__ == "__main__":
     parser.add_argument('--results_root', type=str, default='results/integral')
     parser.add_argument('--n_trajectories', type=int, default=1)
     parser.add_argument('--max_order', type=int, default=None)
+    # --- reproducibility / ablation switches (rebuttal) ---
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Seed for data generation, init and batch sampling.')
+    parser.add_argument('--loss_mode', type=str, default='integral',
+                        choices=['integral', 'derivative'],
+                        help='integral: windowed integral residual (ours); '
+                             'derivative: finite-difference collocation residual.')
+    parser.add_argument('--bounded', type=int, default=1,
+                        help='1: box-constrained (bounded) tensor parametrization; 0: unconstrained.')
+    parser.add_argument('--lambda_schedule', type=str, default='none',
+                        choices=['none', 'staged'],
+                        help='staged: order-wise staged lambda schedule.')
+    parser.add_argument('--n_intervals', type=int, default=32,
+                        help='Number of sampled integral windows (or collocation points) per step.')
+    parser.add_argument('--window_frac', type=float, default=1.0,
+                        help='Max integral window length as a fraction of the observation horizon.')
+    parser.add_argument('--l1', type=float, default=0.0,
+                        help='L1 sparsity weight on the interaction tensor.')
+    parser.add_argument('--run_tag', type=str, default=None,
+                        help='Output sub-directory name; defaults to a timestamp.')
+    parser.add_argument('--oracle_regressor', type=int, default=0,
+                        help='1: build Phi and f from the noise-free trajectory while the '
+                             'residual LHS stays noisy. Isolates errors-in-variables in the '
+                             'regressor from noise in the matched increment/derivative.')
+    parser.add_argument('--no_resample', type=int, default=0,
+                        help='1: skip the dense linear-interpolation resampling and stay on '
+                             'the native observation grid (coarse dt regime).')
+    parser.add_argument('--max_candidates_per_order', type=int, default=0,
+                        help='Subsample negative candidates to this many per order '
+                             '(0 = use the full support). Needed for N=60 scenes where '
+                             'the full support is ~6e6 hyperedges.')
+    parser.add_argument('--batch_size', type=int, default=32)
     args = parser.parse_args()
-    
+
+    set_global_seed(args.seed)
     HypergraphModel, scene_spec = get_scene_model(args.scene)
     defaults = HypergraphModel.get_default_params()
     if args.scene in {"ecological", "neuronal", "social"}:
@@ -674,12 +895,12 @@ if __name__ == "__main__":
         N = args.n_nodes if args.n_nodes is not None else defaults["n_nodes"]
         max_order = args.max_order if args.max_order is not None else defaults["max_order"]
     
-    A_learned, edge_config, save_dir = train_integral_model(
+    A_learned, edge_config, save_dir, orderwise_support = train_integral_model(
         N=N, 
         max_order=max_order, 
         n_epochs=args.n_epochs, 
         lr=args.lr, 
-        batch_size=32,
+        batch_size=args.batch_size,
         gpu_id=args.gpu_id,
         use_nn=True,
         n_samples=args.n_samples,
@@ -687,15 +908,22 @@ if __name__ == "__main__":
         n_trajectories=args.n_trajectories,
         results_root=args.results_root,
         scene_label=scene_spec.label,
+        seed=args.seed,
+        loss_mode=args.loss_mode,
+        bounded=bool(args.bounded),
+        lambda_schedule=args.lambda_schedule,
+        n_intervals=args.n_intervals,
+        window_frac=args.window_frac,
+        l1_weight=args.l1,
+        run_tag=args.run_tag,
+        oracle_regressor=bool(args.oracle_regressor),
+        no_resample=bool(args.no_resample),
+        max_candidates_per_order=args.max_candidates_per_order,
     )
     
     print("\nComputing AUC scores...")
     auc_scores, roc_data = compute_auc_scores(
-        A_learned,
-        edge_config,
-        N,
-        max_order,
-        build_orderwise_support(N, max_order),
+        A_learned, edge_config, N, max_order, orderwise_support,
     )
     
     print("\nAUC scores for each order:")
@@ -718,17 +946,12 @@ if __name__ == "__main__":
     print("\nPlotting ROC curves...")
     plot_roc_curves(roc_data, auc_scores, save_dir, max_order)
     save_roc_curve_data(
-        A_learned,
-        edge_config,
-        N,
-        max_order,
-        save_dir,
-        build_orderwise_support(N, max_order),
+        A_learned, edge_config, N, max_order, save_dir, orderwise_support,
     )
 
     write_standard_summary(
         save_dir=save_dir,
-        method="integral_pinn_linear",
+        method=f"integral_pinn_linear[{args.loss_mode}]",
         scene=scene_spec.label,
         config={
             "n_nodes": N,
@@ -738,8 +961,19 @@ if __name__ == "__main__":
             "lr": args.lr,
             "noise": args.noise,
             "n_trajectories": args.n_trajectories,
+            "seed": args.seed,
+            "loss_mode": args.loss_mode,
+            "bounded": bool(args.bounded),
+            "lambda_schedule": args.lambda_schedule,
+            "n_intervals": args.n_intervals,
+            "window_frac": args.window_frac,
+            "l1": args.l1,
+            "oracle_regressor": bool(args.oracle_regressor),
+            "no_resample": bool(args.no_resample),
+            "max_candidates_per_order": args.max_candidates_per_order,
         },
         auc_scores=auc_scores,
+        extra_metrics={"macro_auc": macro_auc(auc_scores)},
     )
     
     print(f"\nResults saved to {save_dir}/")

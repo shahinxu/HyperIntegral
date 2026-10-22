@@ -349,7 +349,10 @@ class HypergraphModel:
             HypergraphModel._edge_array(edge_config, "quads", 4),
             HypergraphModel._edge_array(edge_config, "quints", 5),
         )
-        np.random.seed(42)
+        # Initial condition seed; overridable so that multi-seed experiments
+        # vary the trajectory, not just the training randomness.
+        ic_seed = int(os.getenv("HG_DATA_SEED", "42"))
+        np.random.seed(ic_seed)
         x0 = np.random.uniform(-1, 1, size=(3 * n_nodes,))
 
         t_span = (0, tmax)
