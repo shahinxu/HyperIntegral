@@ -71,7 +71,7 @@ class HypergraphModel:
     ) -> Path:
         env_path = os.getenv("ROSSLER_HYPERGRAPH_FILE", "").strip()
         if env_path:
-            return Path(env_path)
+            return _abs_preset
 
         env_preset = os.getenv("ROSSLER_HYPERGRAPH_PRESET", "").strip()
         if env_preset:

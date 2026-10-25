@@ -24,6 +24,9 @@ def main():
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--train_seed", type=int, default=123)
     parser.add_argument("--test_seed", type=int, default=456)
+    parser.add_argument("--graph_seed", type=int, default=42)
+    parser.add_argument("--n_nodes", type=int, default=None)
+    parser.add_argument("--max_order", type=int, default=None)
     parser.add_argument("--out_dir", type=str, default="social-data")
     args = parser.parse_args()
 
@@ -32,9 +35,12 @@ def main():
         out_dir = os.path.join(THIS_DIR, out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    _seed = getattr(args, 'seed', None) or args.graph_seed
+    np.random.seed(_seed)
+    os.environ.setdefault("HG_DATA_SEED", str(_seed))
     defaults = HypergraphModel.get_default_params()
-    n_nodes = defaults["n_nodes"]
-    max_order = defaults["max_order"]
+    n_nodes = args.n_nodes or defaults["n_nodes"]
+    max_order = args.max_order or defaults["max_order"]
     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
 
     edges = [[i - 1, j - 1] for i, j in edge_config.get("edges", [])]

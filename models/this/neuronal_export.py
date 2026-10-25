@@ -18,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_samples", type=int, default=300)
     parser.add_argument("--noise", type=float, default=0.0)
+    parser.add_argument("--n_nodes", type=int, default=None)
+    parser.add_argument("--max_order", type=int, default=None)
     parser.add_argument("--out_dir", type=str, default="neuronal-data")
     args = parser.parse_args()
 
@@ -26,9 +28,12 @@ def main():
         out_dir = os.path.join(THIS_DIR, out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    _seed = getattr(args, 'seed', None) or int(os.environ.get('HG_DATA_SEED', 42))
+    np.random.seed(_seed)
+    os.environ.setdefault("HG_DATA_SEED", str(_seed))
     defaults = HypergraphModel.get_default_params()
-    n_nodes = defaults["n_nodes"]
-    max_order = defaults["max_order"]
+    n_nodes = args.n_nodes or defaults["n_nodes"]
+    max_order = args.max_order or defaults["max_order"]
     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
     t, x_data = HypergraphModel.generate_training_data(
         n_nodes,

@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import os
 
+from itertools import combinations
 import numpy as np
 import torch
 from scipy.integrate import solve_ivp
@@ -89,7 +90,7 @@ class HypergraphModel:
     def _resolve_designed_hypergraph_file(params: "HypergraphModel.EcologicalHypergraphParams") -> Path | None:
         env_path = os.getenv("ECOLOGY_HYPERGRAPH_FILE", "").strip()
         if env_path:
-            return Path(env_path)
+            return _abs_preset
 
         env_preset = os.getenv("ECOLOGY_HYPERGRAPH_PRESET", "").strip()
         if env_preset:
@@ -574,7 +575,20 @@ class HypergraphModel:
 
     @staticmethod
     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
+        """All candidate hyperedges up to max_order.
+
+        This used to return get_hyperedge_config(), i.e. the ground-truth
+        hyperedges, which left any consumer with a candidate pool containing no
+        negatives at all (every AUC came out undefined).  Return the actual
+        combinatorial candidate set instead, matching the other scenes.
+        """
+        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
+        out = {k: [] for k in key_by_order.values()}
+        for order in range(2, min(max_order, 5) + 1):
+            out[key_by_order[order]] = [
+                list(e) for e in combinations(range(1, n_nodes + 1), order)
+            ]
+        return out
 
     @staticmethod
     def generate_training_data(
@@ -623,8 +637,11 @@ class HypergraphModel:
 
     @staticmethod
     def get_default_params(hypergraph_preset: str | None = None) -> dict:
+        # Honour ECOLOGY_HYPERGRAPH_PRESET here too, so the reported defaults
+        # match the preset the rest of the pipeline actually loads.
+        preset = hypergraph_preset or os.getenv("ECOLOGY_HYPERGRAPH_PRESET", "").strip() or "n60"
         designed = HypergraphModel._load_designed_hyperedges(
-            HypergraphModel._preset_hypergraph_file(hypergraph_preset or "n60")
+            HypergraphModel._preset_hypergraph_file(preset)
         )
         return {
             "n_nodes": designed["n_nodes"],

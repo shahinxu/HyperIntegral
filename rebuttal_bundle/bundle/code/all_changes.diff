@@ -1,0 +1,1434 @@
+diff --git a/.gitignore b/.gitignore
+index fd6275c..a2a1949 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -10,4 +10,6 @@ results/
+ *.pt
+ *.pth
+ *.png
+-*.pdf
+\ No newline at end of file
++*.pdf
++# Scene presets define the benchmarks and must be versioned
++!lib_*/presets/*.json
+diff --git a/experiments/sweep.py b/experiments/sweep.py
+index 5485eef..32b58e3 100644
+--- a/experiments/sweep.py
++++ b/experiments/sweep.py
+@@ -257,8 +257,106 @@ def suite_sparsity(cfg):
+     return jobs
+ 
+ 
++
++# --- paper baselines (HyperPINN family) -----------------------------------
++# cp / ITC_0 / ITC_sup only support max_order <= 3, so any comparison that
++# includes them has to be run at max_order 3.
++HYPERPINN_METHODS = {
++    "hyperpinn":              {"scene_arg": "scene", "python": True,  "max_order": 5},
++    "hyperpinn_base":         {"scene_arg": "preset", "python": True,  "max_order": 5},
++    "hyperpinn_cp":           {"scene_arg": "preset", "python": True,  "max_order": 3},
++    "hyperpinn_tucker":       {"scene_arg": "preset", "python": False, "max_order": 5},
++    "hyperpinn_tensor_train": {"scene_arg": "preset", "python": False, "max_order": 5},
++    "hyperpinn_ITC_0":        {"scene_arg": "preset", "python": True,  "max_order": 3},
++    "hyperpinn_ITC_sup":      {"scene_arg": "preset", "python": True,  "max_order": 3},
++}
++
++
++def _hyperpinn_job(name, method, n_nodes, max_order, n_samples, noise, seed,
++                   n_epochs, lr, extra=(), meta_extra=None):
++    spec = HYPERPINN_METHODS[method]
++    cli = ["--n_samples", str(n_samples), "--noise", str(noise),
++           "--max_order", str(max_order), "--n_epochs", str(n_epochs),
++           "--lr", str(lr), "--seed", str(seed)]
++    if spec["scene_arg"] == "scene":
++        cli += ["--scene", "rossler", "--n_nodes", str(n_nodes)]
++    else:
++        cli += ["--preset", f"n{n_nodes}"]
++    if spec["python"]:
++        cli += ["--python", PYTHON]
++    cli += list(extra)
++    meta = {"method": method, "scene": "rossler", "n_nodes": n_nodes,
++            "noise": noise, "seed": seed, "n_samples": n_samples,
++            "max_order": max_order}
++    meta.update(meta_extra or {})
++    return Job(name, f"models.{method}.run", cli, meta, rossler_env(n_nodes))
++
++
++def suite_baselines(cfg):
++    """The paper's own baselines against our method, matched budget.
++
++    Run at max_order 3 by default because the low-rank variants (cp, ITC) cap
++    there; running everything at the same order is what makes the comparison
++    legitimate.
++    """
++    jobs = []
++    mo = cfg["baseline_max_order"]
++    for scene, n_nodes, _ in cfg["scenes"]:
++        if scene != "rossler":
++            continue
++        for noise in cfg["noises"]:
++            for seed in cfg["seeds"]:
++                base = f"rossler{n_nodes}_noise{noise}_seed{seed}"
++                jobs.append(_integral_job(
++                    f"ours_{base}", scene, n_nodes, mo, cfg["n_samples"], noise,
++                    seed, cfg["n_epochs"], cfg["lr"],
++                    meta_extra={"variant": "ours", "max_order": mo},
++                    cfg_max_cand=cfg["max_cand"]))
++                for method in cfg["baseline_methods"]:
++                    if HYPERPINN_METHODS[method]["max_order"] < mo:
++                        continue
++                    jobs.append(_hyperpinn_job(
++                        f"{method}_{base}", method, n_nodes, mo, cfg["n_samples"],
++                        noise, seed, cfg["baseline_epochs"], cfg["baseline_lr"],
++                        meta_extra={"variant": method}))
++    return jobs
++
++
++def suite_baseline_tuning(cfg):
++    """Equal-budget grid for every paper baseline and for our method:
++    4 learning rates x 2 epoch budgets = 8 configurations each."""
++    jobs = []
++    mo = cfg["baseline_max_order"]
++    seed = cfg["seeds"][0]
++    lrs = [1e-4, 5e-4, 1e-3, 5e-3]
++    budgets = [7000, 14000]
++    for scene, n_nodes, _ in cfg["scenes"]:
++        if scene != "rossler":
++            continue
++        for noise in cfg["noises"]:
++            for method in cfg["baseline_methods"]:
++                if HYPERPINN_METHODS[method]["max_order"] < mo:
++                    continue
++                for lr in lrs:
++                    for ep in budgets:
++                        jobs.append(_hyperpinn_job(
++                            f"tune_{method}_lr{lr}_ep{ep}_n{n_nodes}_noise{noise}",
++                            method, n_nodes, mo, cfg["n_samples"], noise, seed, ep, lr,
++                            meta_extra={"variant": f"tune_{method}", "lr": lr, "epochs": ep}))
++            for lr in lrs:
++                for ep in budgets:
++                    jobs.append(_integral_job(
++                        f"tune_ours_lr{lr}_ep{ep}_n{n_nodes}_noise{noise}",
++                        scene, n_nodes, mo, cfg["n_samples"], noise, seed, ep, lr,
++                        meta_extra={"variant": "tune_ours", "lr": lr, "epochs": ep},
++                        cfg_max_cand=cfg["max_cand"]))
++    return jobs
++
++
+ SUITES = {
+     "main": suite_main,
++    "baselines": suite_baselines,
++    "baseline_tuning": suite_baseline_tuning,
+     "sparsity": suite_sparsity,
+     "diagnostic": suite_diagnostic,
+     "ablation": suite_ablation,
+@@ -326,6 +424,18 @@ def main():
+     ap.add_argument("--sindy_window", type=int, default=20)
+     ap.add_argument("--sigma_h_samples", type=int, nargs="+", default=[100, 200, 300, 600])
+     ap.add_argument("--sigma_h_noises", type=float, nargs="+", default=[0.0, 0.01, 0.05, 0.1])
++    ap.add_argument("--baseline_max_order", type=int, default=5,
++                    help="Order at which the baseline comparison runs. Only the "
++                         "cp/ITC variants cap at 3; HyperPINN itself runs at 5.")
++    ap.add_argument("--baseline_methods", type=str, nargs="+",
++                    default=["hyperpinn_base"],
++                    help="Which baselines to include. Defaults to hyperpinn_base, which IS "
++                         "HyperPINN -- the only baseline the reviewers name. On Rossler it is "
++                         "identical to `hyperpinn` except for a vmap/jacrev time derivative "
++                         "that is simply faster; `hyperpinn` is the slower multi-scene build. "
++                         "The low-rank tensor-decomposition variants are out of scope.")
++    ap.add_argument("--baseline_epochs", type=int, default=14000)
++    ap.add_argument("--baseline_lr", type=float, default=5e-4)
+     ap.add_argument("--max_cand", type=int, default=0,
+                     help="Subsample negative candidates to this many per order (0 = full).")
+     ap.add_argument("--l1_weights", type=float, nargs="+", default=[0.0, 1e-4, 1e-3, 1e-2],
+@@ -347,7 +457,11 @@ def main():
+            "sindy_threshold": args.sindy_threshold, "sindy_window": args.sindy_window,
+            "sigma_h_samples": args.sigma_h_samples, "sigma_h_noises": args.sigma_h_noises,
+            "diag_samples": args.diag_samples, "max_cand": args.max_cand,
+-           "l1_weights": args.l1_weights}
++           "l1_weights": args.l1_weights,
++           "baseline_max_order": args.baseline_max_order,
++           "baseline_epochs": args.baseline_epochs,
++           "baseline_lr": args.baseline_lr,
++           "baseline_methods": args.baseline_methods}
+ 
+     jobs = SUITES[args.suite](cfg)
+     out_root = Path(args.out)
+diff --git a/lib_ecological_dynamics/hypergraph.py b/lib_ecological_dynamics/hypergraph.py
+index 9a793f8..d009f71 100644
+--- a/lib_ecological_dynamics/hypergraph.py
++++ b/lib_ecological_dynamics/hypergraph.py
+@@ -5,6 +5,7 @@ from pathlib import Path
+ import json
+ import os
+ 
++from itertools import combinations
+ import numpy as np
+ import torch
+ from scipy.integrate import solve_ivp
+@@ -574,7 +575,20 @@ class HypergraphModel:
+ 
+     @staticmethod
+     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
+-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
++        """All candidate hyperedges up to max_order.
++
++        This used to return get_hyperedge_config(), i.e. the ground-truth
++        hyperedges, which left any consumer with a candidate pool containing no
++        negatives at all (every AUC came out undefined).  Return the actual
++        combinatorial candidate set instead, matching the other scenes.
++        """
++        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
++        out = {k: [] for k in key_by_order.values()}
++        for order in range(2, min(max_order, 5) + 1):
++            out[key_by_order[order]] = [
++                list(e) for e in combinations(range(1, n_nodes + 1), order)
++            ]
++        return out
+ 
+     @staticmethod
+     def generate_training_data(
+@@ -623,8 +637,11 @@ class HypergraphModel:
+ 
+     @staticmethod
+     def get_default_params(hypergraph_preset: str | None = None) -> dict:
++        # Honour ECOLOGY_HYPERGRAPH_PRESET here too, so the reported defaults
++        # match the preset the rest of the pipeline actually loads.
++        preset = hypergraph_preset or os.getenv("ECOLOGY_HYPERGRAPH_PRESET", "").strip() or "n60"
+         designed = HypergraphModel._load_designed_hyperedges(
+-            HypergraphModel._preset_hypergraph_file(hypergraph_preset or "n60")
++            HypergraphModel._preset_hypergraph_file(preset)
+         )
+         return {
+             "n_nodes": designed["n_nodes"],
+diff --git a/lib_neuronal_synchronization/hypergraph.py b/lib_neuronal_synchronization/hypergraph.py
+index 624d587..6bf3d54 100644
+--- a/lib_neuronal_synchronization/hypergraph.py
++++ b/lib_neuronal_synchronization/hypergraph.py
+@@ -9,6 +9,7 @@ from pathlib import Path
+ import json
+ import os
+ 
++from itertools import combinations
+ import numpy as np
+ import torch
+ from scipy.integrate import solve_ivp
+@@ -656,7 +657,19 @@ class HypergraphModel:
+ 
+     @staticmethod
+     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
+-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
++        """All candidate hyperedges up to max_order.
++
++        Previously returned the ground-truth configuration, which gave callers
++        a candidate pool with no negative examples and therefore undefined AUC.
++        """
++        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
++        out = {k: [] for k in key_by_order.values()}
++        for order in range(2, min(max_order, 5) + 1):
++            out[key_by_order[order]] = [
++                list(e) for e in combinations(range(1, n_nodes + 1), order)
++            ]
++        return out
++
+ 
+     @staticmethod
+     def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
+@@ -691,7 +704,11 @@ class HypergraphModel:
+ 
+     @staticmethod
+     def get_default_params() -> dict:
+-        designed = HypergraphModel._load_designed_hypergraph(HypergraphModel._preset_hypergraph_file())
++        # Resolve through the same path as everything else, so NEURONAL_HYPERGRAPH_FILE
++        # selects the preset here too instead of always reporting the built-in one.
++        designed = HypergraphModel._load_designed_hypergraph(
++            HypergraphModel._resolve_designed_hypergraph_file(HypergraphModel.SimplicialParams())
++        )
+         return {
+             "n_nodes": designed["n_nodes"],
+             "max_order": designed["max_order"],
+diff --git a/lib_social_contagion/hypergraph.py b/lib_social_contagion/hypergraph.py
+index 484a9b8..3b02dbc 100644
+--- a/lib_social_contagion/hypergraph.py
++++ b/lib_social_contagion/hypergraph.py
+@@ -5,6 +5,7 @@ from pathlib import Path
+ import json
+ import os
+ 
++from itertools import combinations
+ import numpy as np
+ import torch
+ from scipy.integrate import solve_ivp
+@@ -416,7 +417,18 @@ class HypergraphModel:
+ 
+     @staticmethod
+     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
+-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
++        """All candidate hyperedges up to max_order.
++
++        Previously returned the ground-truth configuration, which gave callers
++        a candidate pool with no negative examples and therefore undefined AUC.
++        """
++        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
++        out = {k: [] for k in key_by_order.values()}
++        for order in range(2, min(max_order, 5) + 1):
++            out[key_by_order[order]] = [
++                list(e) for e in combinations(range(1, n_nodes + 1), order)
++            ]
++        return out
+ 
+ 
+     @staticmethod
+diff --git a/models/hyperpinn/HyperPINN/HyperPINN_Ecosystem.py b/models/hyperpinn/HyperPINN/HyperPINN_Ecosystem.py
+index eedd6de..97d7278 100644
+--- a/models/hyperpinn/HyperPINN/HyperPINN_Ecosystem.py
++++ b/models/hyperpinn/HyperPINN/HyperPINN_Ecosystem.py
+@@ -23,7 +23,16 @@ parser = argparse.ArgumentParser(description='Run HyperPINN on ecological hyperg
+ parser.add_argument('--M', type=int, default=300, help='Number of time samples')
+ parser.add_argument('--gpu_id', type=int, default=4)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
++parser.add_argument('--epochs', type=int, default=14000)
++parser.add_argument('--lr', type=float, default=5e-4)
++parser.add_argument('--max_order', type=int, default=None)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ gpu_id = args.gpu_id
+ noise = args.noise
+@@ -49,12 +58,16 @@ QuintList = QuintList_full
+ SextList = SextList_full
+ SeptList = SeptList_full
+ 
+-all_2edges = edge_config.get('edges', [])
+-all_3edges = edge_config.get('triangles', [])
+-all_4edges = edge_config.get('quads', [])
+-all_5edges = edge_config.get('quints', [])
+-all_6edges = edge_config.get('sexts', [])
+-all_7edges = edge_config.get('septs', [])
++# The candidate sets must be the full combinatorial pool, not the ground-truth
++# configuration: using edge_config here left every y_true all-ones, so every
++# AUC came out as nan.
++_all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
++all_2edges = _all_possible.get('edges', [])
++all_3edges = _all_possible.get('triangles', [])
++all_4edges = _all_possible.get('quads', [])
++all_5edges = _all_possible.get('quints', [])
++all_6edges = _all_possible.get('sexts', [])
++all_7edges = _all_possible.get('septs', [])
+ 
+ true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
+ true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
+@@ -95,7 +108,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+@@ -216,13 +229,13 @@ model.lambda_l1_sexts = 0.025
+ model.lambda_l0_sexts = 0.008
+ model.lambda_l1_septs = 0.02
+ model.lambda_l0_septs = 0.005
+-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
++optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+ losses = []
+ sparsity_stats = []
+ t_data = t_data.float().to(device)
+ x_data = x_data.float().to(device)
+ 
+-epochs = 14000
++epochs = args.epochs
+ stage1_epochs = 2500   
+ stage2_epochs = 10000 
+ adaptive_weights = True
+@@ -280,6 +293,18 @@ def evaluate_edges_triangles(
+     y_true_6, y_score_6 = get_labels_and_scores(all_6edges, true_6edges, sext_scores)
+     y_true_7, y_score_7 = get_labels_and_scores(all_7edges, true_7edges, sept_scores)
+ 
++    # This return was missing, so the function always yielded None and the
++    # caller crashed before any AUC could be reported for this scene.
++    return (
++        y_true_2, y_score_2,
++        y_true_3, y_score_3,
++        y_true_4, y_score_4,
++        y_true_5, y_score_5,
++        y_true_6, y_score_6,
++        y_true_7, y_score_7,
++    )
++
++
+ def compute_auc(y_true, y_score):
+     fpr, tpr, _ = roc_curve(y_true, y_score)
+     return auc(fpr, tpr)
+diff --git a/models/hyperpinn/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn/HyperPINN/HyperPINN_Rossler.py
+index 3338921..ad126b1 100644
+--- a/models/hyperpinn/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn/HyperPINN/HyperPINN_Rossler.py
+@@ -28,7 +28,15 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+ parser.add_argument('--max_order', type=int, default=defaults['max_order'])
+ parser.add_argument('--gpu_id', type=int, default=0)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
++parser.add_argument('--epochs', type=int, default=14000)
++parser.add_argument('--lr', type=float, default=5e-4)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: make the baseline reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ N = args.N
+ max_order = args.max_order
+@@ -68,7 +76,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
+ )
+ 
+ if noise > 0:
+-    np.random.seed()
++    np.random.seed(args.seed)
+     X_noisy = X + np.random.randn(*X.shape) * noise
+     print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+ else:
+@@ -101,7 +109,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+@@ -199,13 +207,13 @@ model.lambda_l1_quads = 0.04
+ model.lambda_l0_quads = 0.015
+ model.lambda_l1_quints = 0.03
+ model.lambda_l0_quints = 0.01
+-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
++optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+ losses = []
+ sparsity_stats = []
+ t_data = t_data.float().to(device)
+ x_data = x_data.float().to(device)
+ 
+-epochs = 14000
++epochs = args.epochs
+ stage1_epochs = 2500   
+ stage2_epochs = 10000 
+ adaptive_weights = True
+diff --git a/models/hyperpinn/HyperPINN/HyperPINN_SocialContagion.py b/models/hyperpinn/HyperPINN/HyperPINN_SocialContagion.py
+index d74f32d..7a00b79 100644
+--- a/models/hyperpinn/HyperPINN/HyperPINN_SocialContagion.py
++++ b/models/hyperpinn/HyperPINN/HyperPINN_SocialContagion.py
+@@ -22,7 +22,16 @@ parser = argparse.ArgumentParser(description="Run HyperPINN on social contagion
+ parser.add_argument("--M", type=int, default=300, help="Number of time samples")
+ parser.add_argument("--gpu_id", type=int, default=0)
+ parser.add_argument("--noise", type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
++parser.add_argument('--epochs', type=int, default=14000)
++parser.add_argument('--lr', type=float, default=5e-4)
++parser.add_argument('--max_order', type=int, default=None)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ M = args.M
+ gpu_id = args.gpu_id
+@@ -40,10 +49,13 @@ EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") el
+ TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
+ QuadList = np.array(edge_config.get("quads", [])) if edge_config.get("quads") else np.empty((0, 4), dtype=int)
+ 
+-all_2edges = edge_config.get("edges", [])
+-all_3edges = edge_config.get("triangles", [])
+-all_4edges = edge_config.get("quads", [])
+-all_5edges = edge_config.get("quints", [])
++# Candidate sets must be the full combinatorial pool, not the ground-truth
++# configuration, otherwise every y_true is all-ones and the AUCs are nan.
++_all_possible = SCMHypergraphModel.generate_all_possible_hyperedges(N, max_order)
++all_2edges = _all_possible.get("edges", [])
++all_3edges = _all_possible.get("triangles", [])
++all_4edges = _all_possible.get("quads", [])
++all_5edges = _all_possible.get("quints", [])
+ all_6edges = []
+ all_7edges = []
+ 
+@@ -82,7 +94,7 @@ for i in range(N):
+     plt.grid(True)
+ plt.tight_layout()
+ 
+-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+@@ -209,14 +221,14 @@ model.lambda_l1_triangles = 0.05
+ model.lambda_l0_edges = 0.01
+ model.lambda_l0_triangles = 0.02
+ # higher-order lambdas unused here but present on the model
+-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
++optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+ 
+ losses = []
+ sparsity_stats = []
+ t_data = t_data.float().to(device)
+ x_data = x_data.float().to(device)
+ 
+-epochs = 14000
++epochs = args.epochs
+ stage1_epochs = 2500
+ stage2_epochs = 10000
+ adaptive_weights = True
+diff --git a/models/hyperpinn/HyperPINN/HyperPINN_neuronal_synchronization.py b/models/hyperpinn/HyperPINN/HyperPINN_neuronal_synchronization.py
+index e636e11..2bd9149 100644
+--- a/models/hyperpinn/HyperPINN/HyperPINN_neuronal_synchronization.py
++++ b/models/hyperpinn/HyperPINN/HyperPINN_neuronal_synchronization.py
+@@ -22,7 +22,16 @@ parser = argparse.ArgumentParser(description="Run HyperPINN on neuronal synchron
+ parser.add_argument("--M", type=int, default=300, help="Number of time samples")
+ parser.add_argument("--gpu_id", type=int, default=0)
+ parser.add_argument("--noise", type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
++parser.add_argument('--epochs', type=int, default=14000)
++parser.add_argument('--lr', type=float, default=5e-4)
++parser.add_argument('--max_order', type=int, default=None)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ M = args.M
+ gpu_id = args.gpu_id
+@@ -40,10 +49,13 @@ EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") el
+ TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
+ QuadList = np.array(edge_config.get("quads", [])) if edge_config.get("quads") else np.empty((0, 4), dtype=int)
+ 
+-all_2edges = edge_config.get("edges", [])
+-all_3edges = edge_config.get("triangles", [])
+-all_4edges = edge_config.get("quads", [])
+-all_5edges = edge_config.get("quints", [])
++# Candidate sets must be the full combinatorial pool, not the ground-truth
++# configuration, otherwise every y_true is all-ones and the AUCs are nan.
++_all_possible = NSHypergraphModel.generate_all_possible_hyperedges(N, max_order)
++all_2edges = _all_possible.get("edges", [])
++all_3edges = _all_possible.get("triangles", [])
++all_4edges = _all_possible.get("quads", [])
++all_5edges = _all_possible.get("quints", [])
+ all_6edges = []
+ all_7edges = []
+ 
+@@ -83,7 +95,7 @@ for i in range(N):
+     plt.grid(True)
+ plt.tight_layout()
+ 
+-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+@@ -210,14 +222,14 @@ model.lambda_l1_triangles = 0.05
+ model.lambda_l0_edges = 0.01
+ model.lambda_l0_triangles = 0.02
+ # higher-order lambdas unused here but present on the model
+-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
++optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+ 
+ losses = []
+ sparsity_stats = []
+ t_data = t_data.float().to(device)
+ x_data = x_data.float().to(device)
+ 
+-epochs = 14000
++epochs = args.epochs
+ stage1_epochs = 2500
+ stage2_epochs = 10000
+ adaptive_weights = True
+diff --git a/models/hyperpinn/run.py b/models/hyperpinn/run.py
+index 19ee264..feec39b 100644
+--- a/models/hyperpinn/run.py
++++ b/models/hyperpinn/run.py
+@@ -67,6 +67,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), "".join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--scene", required=True, choices=sorted(SCENE_TO_SCRIPT.keys()))
+@@ -75,6 +87,8 @@ def main():
+     parser.add_argument("--max_order", type=int, default=None)
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--n_epochs", type=int, default=20000)
+     parser.add_argument("--lr", type=float, default=0.001)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+@@ -96,8 +110,20 @@ def main():
+     if args.scene not in FILE_DRIVEN_SCENES and effective_max_order is not None:
+         cmd.extend(["--max_order", str(effective_max_order)])
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
++    cmd.extend(["--epochs", str(args.n_epochs), "--lr", str(args.lr)])
++
++    if args.scene == "rossler" and args.n_nodes is not None:
++
++        # Without this the n100 preset is loaded whatever --n_nodes says.
++
++        os.environ["ROSSLER_HYPERGRAPH_PRESET"] = f"n{args.n_nodes}"
++
+     env = os.environ.copy()
+     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
++    if args.run_tag:
++        env["HYPERPINN_RUN_TAG"] = args.run_tag
+     env["PYTHONUNBUFFERED"] = "1"
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -114,7 +140,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / "auc_scores.txt")
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / "auc_scores.txt")
+     write_standard_summary(
+         save_dir=str(results_path),
+         method="baseline_hyperpinn",
+@@ -126,6 +152,7 @@ def main():
+             "max_order": defaults["max_order"] if args.scene in FILE_DRIVEN_SCENES else effective_max_order,
+             "gpu_id": args.gpu_id,
+             "noise": args.noise,
++            "seed": args.seed,
+         },
+         auc_scores=auc_scores,
+     )
+diff --git a/models/hyperpinn_ITC_0/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_ITC_0/HyperPINN/HyperPINN_Rossler.py
+index 92cea28..e213a6b 100644
+--- a/models/hyperpinn_ITC_0/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_ITC_0/HyperPINN/HyperPINN_Rossler.py
+@@ -132,10 +132,16 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3, choices=[2, 3])
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument('--seed', type=int, default=42)
+     parser.add_argument("--itc_rank", type=int, default=16)
+     parser.add_argument("--epochs", type=int, default=14000)
+     parser.add_argument("--lr", type=float, default=5e-4)
+     args = parser.parse_args()
++    # HYPERPINN_SEEDED: make the baseline reproducible across runs.
++    import random as _random
++    _random.seed(args.seed); np.random.seed(args.seed)
++    torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++    os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+     N = args.N
+     max_order = args.max_order
+@@ -165,7 +171,7 @@ def main():
+     )
+ 
+     if noise > 0:
+-        np.random.seed()
++        np.random.seed(args.seed)
+         X_noisy = X + np.random.randn(*X.shape) * noise
+         print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+     else:
+@@ -194,7 +200,7 @@ def main():
+         plt.grid(True)
+     plt.tight_layout()
+ 
+-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++    timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
+     results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+     results_dir = os.path.join(
+         results_base,
+diff --git a/models/hyperpinn_ITC_0/run.py b/models/hyperpinn_ITC_0/run.py
+index 9eff213..c193897 100644
+--- a/models/hyperpinn_ITC_0/run.py
++++ b/models/hyperpinn_ITC_0/run.py
+@@ -76,6 +76,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), "".join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--preset", type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -85,6 +97,8 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3)
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--n_epochs", type=int, default=20000)
+     parser.add_argument("--lr", type=float, default=0.001)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+@@ -136,8 +150,12 @@ def main():
+     if effective_max_order is not None:
+         cmd.extend(["--max_order", str(effective_max_order)])
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
+     env = os.environ.copy()
+     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
++    if args.run_tag:
++        env["HYPERPINN_RUN_TAG"] = args.run_tag
+     env["PYTHONUNBUFFERED"] = "1"
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -154,7 +172,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / "auc_scores.txt")
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / "auc_scores.txt")
+     write_standard_summary(
+         save_dir=str(results_path),
+         method="hyperpinn_itc",
+@@ -167,6 +185,7 @@ def main():
+             "max_order": effective_max_order,
+             "gpu_id": args.gpu_id,
+             "noise": args.noise,
++            "seed": args.seed,
+             "itc_rank": args.itc_rank,
+         },
+         auc_scores=auc_scores,
+diff --git a/models/hyperpinn_ITC_sup/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_ITC_sup/HyperPINN/HyperPINN_Rossler.py
+index 4ff6786..fd30860 100644
+--- a/models/hyperpinn_ITC_sup/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_ITC_sup/HyperPINN/HyperPINN_Rossler.py
+@@ -174,6 +174,7 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3, choices=[2, 3])
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument('--seed', type=int, default=42)
+     parser.add_argument("--itc_rank", type=int, default=16)
+     parser.add_argument("--epochs", type=int, default=14000)
+     parser.add_argument("--lr", type=float, default=5e-4)
+@@ -181,6 +182,11 @@ def main():
+     parser.add_argument("--completion_neg_ratio", type=float, default=1.0)
+     parser.add_argument("--completion_seed", type=int, default=42)
+     args = parser.parse_args()
++    # HYPERPINN_SEEDED: make the baseline reproducible across runs.
++    import random as _random
++    _random.seed(args.seed); np.random.seed(args.seed)
++    torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++    os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+     N = args.N
+     max_order = args.max_order
+@@ -210,7 +216,7 @@ def main():
+     )
+ 
+     if noise > 0:
+-        np.random.seed()
++        np.random.seed(args.seed)
+         X_noisy = X + np.random.randn(*X.shape) * noise
+         print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+     else:
+@@ -239,7 +245,7 @@ def main():
+         plt.grid(True)
+     plt.tight_layout()
+ 
+-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++    timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
+     results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+     results_dir = os.path.join(
+         results_base,
+diff --git a/models/hyperpinn_ITC_sup/run.py b/models/hyperpinn_ITC_sup/run.py
+index 652e0a3..c125af4 100644
+--- a/models/hyperpinn_ITC_sup/run.py
++++ b/models/hyperpinn_ITC_sup/run.py
+@@ -76,6 +76,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), "".join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--preset", type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -85,6 +97,8 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3)
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--n_epochs", type=int, default=20000)
+     parser.add_argument("--lr", type=float, default=0.001)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+@@ -145,8 +159,12 @@ def main():
+     if effective_max_order is not None:
+         cmd.extend(["--max_order", str(effective_max_order)])
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
+     env = os.environ.copy()
+     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
++    if args.run_tag:
++        env["HYPERPINN_RUN_TAG"] = args.run_tag
+     env["PYTHONUNBUFFERED"] = "1"
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -163,7 +181,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / "auc_scores.txt")
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / "auc_scores.txt")
+     write_standard_summary(
+         save_dir=str(results_path),
+         method="hyperpinn_itc",
+@@ -176,6 +194,7 @@ def main():
+             "max_order": effective_max_order,
+             "gpu_id": args.gpu_id,
+             "noise": args.noise,
++            "seed": args.seed,
+             "itc_rank": args.itc_rank,
+             "observed_fraction": args.observed_fraction,
+             "completion_neg_ratio": args.completion_neg_ratio,
+diff --git a/models/hyperpinn_base/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_base/HyperPINN/HyperPINN_Rossler.py
+index 3591a31..c459b71 100644
+--- a/models/hyperpinn_base/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_base/HyperPINN/HyperPINN_Rossler.py
+@@ -28,7 +28,15 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+ parser.add_argument('--max_order', type=int, default=3)
+ parser.add_argument('--gpu_id', type=int, default=0)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
++parser.add_argument('--epochs', type=int, default=14000)
++parser.add_argument('--lr', type=float, default=5e-4)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: make the baseline reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ N = args.N
+ max_order = args.max_order
+@@ -68,7 +76,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
+ )
+ 
+ if noise > 0:
+-    np.random.seed()
++    np.random.seed(args.seed)
+     X_noisy = X + np.random.randn(*X.shape) * noise
+     print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+ else:
+@@ -101,7 +109,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+@@ -199,13 +207,13 @@ model.lambda_l1_quads = 0.04
+ model.lambda_l0_quads = 0.015
+ model.lambda_l1_quints = 0.03
+ model.lambda_l0_quints = 0.01
+-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
++optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+ losses = []
+ sparsity_stats = []
+ t_data = t_data.float().to(device)
+ x_data = x_data.float().to(device)
+ 
+-epochs = 14000
++epochs = args.epochs
+ stage1_epochs = 2500   
+ stage2_epochs = 10000 
+ adaptive_weights = True
+diff --git a/models/hyperpinn_base/run.py b/models/hyperpinn_base/run.py
+index b398311..1b469e5 100644
+--- a/models/hyperpinn_base/run.py
++++ b/models/hyperpinn_base/run.py
+@@ -76,6 +76,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), "".join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--preset", type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -85,6 +97,8 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3)
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--n_epochs", type=int, default=20000)
+     parser.add_argument("--lr", type=float, default=0.001)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+@@ -117,8 +131,14 @@ def main():
+     if effective_max_order is not None:
+         cmd.extend(["--max_order", str(effective_max_order)])
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
++    cmd.extend(["--epochs", str(args.n_epochs), "--lr", str(args.lr)])
++
+     env = os.environ.copy()
+     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
++    if args.run_tag:
++        env["HYPERPINN_RUN_TAG"] = args.run_tag
+     env["PYTHONUNBUFFERED"] = "1"
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -135,7 +155,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / "auc_scores.txt")
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / "auc_scores.txt")
+     write_standard_summary(
+         save_dir=str(results_path),
+         method="baseline_hyperpinn",
+@@ -148,6 +168,7 @@ def main():
+             "max_order": effective_max_order,
+             "gpu_id": args.gpu_id,
+             "noise": args.noise,
++            "seed": args.seed,
+         },
+         auc_scores=auc_scores,
+     )
+diff --git a/models/hyperpinn_cp/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_cp/HyperPINN/HyperPINN_Rossler.py
+index 64d7970..540be80 100644
+--- a/models/hyperpinn_cp/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_cp/HyperPINN/HyperPINN_Rossler.py
+@@ -28,10 +28,16 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+ parser.add_argument('--max_order', type=int, default=3, choices=[2, 3])
+ parser.add_argument('--gpu_id', type=int, default=0)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
+ parser.add_argument('--cp_rank', type=int, default=16)
+ parser.add_argument('--epochs', type=int, default=14000)
+ parser.add_argument('--lr', type=float, default=5e-4)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: make the baseline reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ N = args.N
+ max_order = args.max_order
+@@ -68,7 +74,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
+ )
+ 
+ if noise > 0:
+-    np.random.seed()
++    np.random.seed(args.seed)
+     X_noisy = X + np.random.randn(*X.shape) * noise
+     print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+ else:
+@@ -101,7 +107,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
+ results_dir = os.path.join(
+     results_base,
+diff --git a/models/hyperpinn_cp/run.py b/models/hyperpinn_cp/run.py
+index b37a1b9..28126c6 100644
+--- a/models/hyperpinn_cp/run.py
++++ b/models/hyperpinn_cp/run.py
+@@ -76,6 +76,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), "".join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--preset", type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -85,6 +97,8 @@ def main():
+     parser.add_argument("--max_order", type=int, default=3)
+     parser.add_argument("--gpu_id", type=int, default=0)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--n_epochs", type=int, default=20000)
+     parser.add_argument("--lr", type=float, default=5e-4)
+     parser.add_argument("--tmax", type=float, default=20.0)
+@@ -138,8 +152,12 @@ def main():
+     if effective_n_nodes is not None:
+         cmd.extend(["--N", str(effective_n_nodes)])
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
+     env = os.environ.copy()
+     env["HYPERPINN_RESULTS_ROOT"] = args.results_root
++    if args.run_tag:
++        env["HYPERPINN_RUN_TAG"] = args.run_tag
+     env["PYTHONUNBUFFERED"] = "1"
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -156,7 +174,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / "auc_scores.txt")
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / "auc_scores.txt")
+     write_standard_summary(
+         save_dir=str(results_path),
+         method="baseline_hyperpinn_cp",
+@@ -169,6 +187,7 @@ def main():
+             "max_order": effective_max_order,
+             "gpu_id": args.gpu_id,
+             "noise": args.noise,
++            "seed": args.seed,
+             "tmax": args.tmax,
+             "cp_rank": args.cp_rank,
+             "n_epochs": args.n_epochs,
+diff --git a/models/hyperpinn_tensor_train/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_tensor_train/HyperPINN/HyperPINN_Rossler.py
+index f245112..8664c16 100644
+--- a/models/hyperpinn_tensor_train/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_tensor_train/HyperPINN/HyperPINN_Rossler.py
+@@ -28,10 +28,16 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+ parser.add_argument('--max_order', type=int, default=3, choices=[2, 3])
+ parser.add_argument('--gpu_id', type=int, default=0)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
+ parser.add_argument('--tt_rank', type=int, default=16)
+ parser.add_argument('--epochs', type=int, default=14000)
+ parser.add_argument('--lr', type=float, default=5e-4)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: make the baseline reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ N = args.N
+ max_order = args.max_order
+@@ -65,7 +71,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
+ )
+ 
+ if noise > 0:
+-    np.random.seed()
++    np.random.seed(args.seed)
+     X_noisy = X + np.random.randn(*X.shape) * noise
+     print(f'Added Gaussian noise with std={noise:.6f} (absolute)')
+ else:
+@@ -98,7 +104,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get('HYPERPINN_RESULTS_ROOT', os.path.join('results', 'hyperpinn_tensor_train'))
+ results_dir = os.path.join(
+     results_base,
+diff --git a/models/hyperpinn_tensor_train/run.py b/models/hyperpinn_tensor_train/run.py
+index 91fc810..1b56cc4 100644
+--- a/models/hyperpinn_tensor_train/run.py
++++ b/models/hyperpinn_tensor_train/run.py
+@@ -73,6 +73,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), ''.join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument('--preset', type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -82,6 +94,8 @@ def main():
+     parser.add_argument('--max_order', type=int, default=3)
+     parser.add_argument('--gpu_id', type=int, default=0)
+     parser.add_argument('--noise', type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument('--tt_rank', type=int, default=16)
+     parser.add_argument('--n_epochs', type=int, default=14000)
+     parser.add_argument('--lr', type=float, default=5e-4)
+@@ -128,8 +142,12 @@ def main():
+         str(args.tmax),
+     ]
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
+     env = os.environ.copy()
+     env['HYPERPINN_RESULTS_ROOT'] = args.results_root
++    if args.run_tag:
++        env['HYPERPINN_RUN_TAG'] = args.run_tag
+     env['PYTHONUNBUFFERED'] = '1'
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -146,7 +164,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / 'auc_scores.txt')
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / 'auc_scores.txt')
+     write_standard_summary(
+         save_dir=str(results_path),
+         method='baseline_hyperpinn_tensor_train',
+diff --git a/models/hyperpinn_tucker/HyperPINN/HyperPINN_Rossler.py b/models/hyperpinn_tucker/HyperPINN/HyperPINN_Rossler.py
+index 81a603e..247975c 100644
+--- a/models/hyperpinn_tucker/HyperPINN/HyperPINN_Rossler.py
++++ b/models/hyperpinn_tucker/HyperPINN/HyperPINN_Rossler.py
+@@ -28,10 +28,16 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
+ parser.add_argument('--max_order', type=int, default=3, choices=[2, 3])
+ parser.add_argument('--gpu_id', type=int, default=0)
+ parser.add_argument('--noise', type=float, default=0.0)
++parser.add_argument('--seed', type=int, default=42)
+ parser.add_argument('--tucker_rank', type=int, default=16)
+ parser.add_argument('--epochs', type=int, default=14000)
+ parser.add_argument('--lr', type=float, default=5e-4)
+ args = parser.parse_args()
++# HYPERPINN_SEEDED: make the baseline reproducible across runs.
++import random as _random
++_random.seed(args.seed); np.random.seed(args.seed)
++torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
++os.environ['HG_DATA_SEED'] = str(args.seed)
+ 
+ N = args.N
+ max_order = args.max_order
+@@ -65,7 +71,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
+ )
+ 
+ if noise > 0:
+-    np.random.seed()
++    np.random.seed(args.seed)
+     X_noisy = X + np.random.randn(*X.shape) * noise
+     print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
+ else:
+@@ -98,7 +104,7 @@ for i in range(N):
+     plt.legend()
+     plt.grid(True)
+ plt.tight_layout()
+-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
++timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
+ results_base = os.environ.get('HYPERPINN_RESULTS_ROOT', os.path.join('results', 'hyperpinn_tucker'))
+ results_dir = os.path.join(
+     results_base,
+diff --git a/models/hyperpinn_tucker/run.py b/models/hyperpinn_tucker/run.py
+index 0392cc7..7258dca 100644
+--- a/models/hyperpinn_tucker/run.py
++++ b/models/hyperpinn_tucker/run.py
+@@ -73,6 +73,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
+     return proc.wait(), ''.join(output_lines)
+ 
+ 
++
++def parse_auc_from_stdout(stdout: str):
++    """The inner scripts only print their AUCs, they never write auc_scores.txt,
++    so the summary used to come out empty.  Take the last reported line."""
++    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
++    best = {}
++    for ln in stdout.splitlines():
++        found = pat.findall(ln)
++        if found:
++            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
++    return best
++
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument('--preset', type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
+@@ -82,6 +94,8 @@ def main():
+     parser.add_argument('--max_order', type=int, default=3)
+     parser.add_argument('--gpu_id', type=int, default=0)
+     parser.add_argument('--noise', type=float, default=0.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument('--tucker_rank', type=int, default=16)
+     parser.add_argument('--n_epochs', type=int, default=14000)
+     parser.add_argument('--lr', type=float, default=5e-4)
+@@ -128,8 +142,12 @@ def main():
+         str(args.tmax),
+     ]
+ 
++    cmd.extend(["--seed", str(args.seed)])
++
+     env = os.environ.copy()
+     env['HYPERPINN_RESULTS_ROOT'] = args.results_root
++    if args.run_tag:
++        env['HYPERPINN_RUN_TAG'] = args.run_tag
+     env['PYTHONUNBUFFERED'] = '1'
+ 
+     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
+@@ -146,7 +164,7 @@ def main():
+         if not results_path.exists():
+             results_path = BASELINE_ROOT / results_dir
+ 
+-    auc_scores = parse_auc_file(results_path / 'auc_scores.txt')
++    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / 'auc_scores.txt')
+     write_standard_summary(
+         save_dir=str(results_path),
+         method='baseline_hyperpinn_tucker',
+diff --git a/models/kernel/train.py b/models/kernel/train.py
+index a5e0a9e..1eedb0c 100644
+--- a/models/kernel/train.py
++++ b/models/kernel/train.py
+@@ -221,8 +221,15 @@ def main():
+     parser.add_argument("--noise", type=float, default=0.0)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+     parser.add_argument("--max_order", type=int, default=None)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
++    parser.add_argument("--max_candidates_per_order", type=int, default=0)
+     parser.add_argument("--results_root", type=str, default="results/kernel")
+     args = parser.parse_args()
++    import random as _random
++    os.environ['HG_DATA_SEED'] = str(args.seed)
++    _random.seed(args.seed); np.random.seed(args.seed)
++    torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
+ 
+     global HypergraphModel
+     HypergraphModel, scene_spec = get_scene_model(args.scene)
+@@ -250,7 +257,7 @@ def main():
+         max_order=max_order,
+         edge_config=edge_config,
+         max_candidates_per_order=max_candidates_per_order,
+-        seed=42,
++        seed=args.seed,
+     )
+ 
+     all_possible_torch = {
+@@ -265,7 +272,7 @@ def main():
+     y_all, f0_all, f_all, z_all, tid_all = [], [], [], [], []
+ 
+     for k in range(max(1, args.n_trajectories)):
+-        seed_k = 123 + k
++        seed_k = args.seed + k
+         sig = inspect.signature(HypergraphModel.generate_training_data)
+         kwargs = {
+             "n_samples": args.n_samples,
+@@ -324,7 +331,7 @@ def main():
+         args.results_root,
+         scene_spec.label,
+         f"sample_{args.n_samples}_noise_{args.noise}",
+-        datetime.now().strftime("%Y%m%d_%H%M%S"),
++        args.run_tag or datetime.now().strftime("%Y%m%d_%H%M%S"),
+     )
+     os.makedirs(save_dir, exist_ok=True)
+ 
+diff --git a/models/this/ecology_export.py b/models/this/ecology_export.py
+index 14b5a72..ab2c0da 100644
+--- a/models/this/ecology_export.py
++++ b/models/this/ecology_export.py
+@@ -18,6 +18,8 @@ def main():
+     parser.add_argument("--n_samples", type=int, default=300)
+     parser.add_argument("--noise", type=float, default=0.0)
+     parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--n_nodes", type=int, default=None)
++    parser.add_argument("--max_order", type=int, default=None)
+     parser.add_argument("--out_dir", type=str, default="ecology-data")
+     args = parser.parse_args()
+ 
+@@ -26,9 +28,11 @@ def main():
+         out_dir = os.path.join(THIS_DIR, out_dir)
+     os.makedirs(out_dir, exist_ok=True)
+ 
++    np.random.seed(args.seed)
++    os.environ.setdefault("HG_DATA_SEED", str(args.seed))
+     defaults = HypergraphModel.get_default_params()
+-    n_nodes = defaults["n_nodes"]
+-    max_order = defaults["max_order"]
++    n_nodes = args.n_nodes or defaults["n_nodes"]
++    max_order = args.max_order or defaults["max_order"]
+     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order, seed=args.seed)
+ 
+     cached = HypergraphModel._cached_hypergraph
+diff --git a/models/this/neuronal_export.py b/models/this/neuronal_export.py
+index 2fd3ae4..f894c69 100644
+--- a/models/this/neuronal_export.py
++++ b/models/this/neuronal_export.py
+@@ -18,6 +18,8 @@ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--n_samples", type=int, default=300)
+     parser.add_argument("--noise", type=float, default=0.0)
++    parser.add_argument("--n_nodes", type=int, default=None)
++    parser.add_argument("--max_order", type=int, default=None)
+     parser.add_argument("--out_dir", type=str, default="neuronal-data")
+     args = parser.parse_args()
+ 
+@@ -26,9 +28,11 @@ def main():
+         out_dir = os.path.join(THIS_DIR, out_dir)
+     os.makedirs(out_dir, exist_ok=True)
+ 
++    np.random.seed(args.seed)
++    os.environ.setdefault("HG_DATA_SEED", str(args.seed))
+     defaults = HypergraphModel.get_default_params()
+-    n_nodes = defaults["n_nodes"]
+-    max_order = defaults["max_order"]
++    n_nodes = args.n_nodes or defaults["n_nodes"]
++    max_order = args.max_order or defaults["max_order"]
+     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
+     t, x_data = HypergraphModel.generate_training_data(
+         n_nodes,
+diff --git a/models/this/run.py b/models/this/run.py
+index 999ba8d..de40566 100644
+--- a/models/this/run.py
++++ b/models/this/run.py
+@@ -63,12 +63,19 @@ def main():
+     parser.add_argument("--lr", type=float, default=0.001)
+     parser.add_argument("--n_trajectories", type=int, default=1)
+     parser.add_argument("--results_root", type=str, default="results_this")
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--run_tag", type=str, default=None)
+     parser.add_argument("--python", type=str, default=None)
+     parser.add_argument("--bin_thresh", type=float, default=1e-4)
+     args = parser.parse_args()
+ 
+     env = os.environ.copy()
+-    env.setdefault("PATH", str(Path.home() / ".local/julia-1.10.5/bin") + os.pathsep + env.get("PATH", ""))
++    env["PATH"] = str(Path.home() / ".local/julia-1.10.5/bin") + os.pathsep + env.get("PATH", "")
++    # The Julia driver shells out to the scene export script; it needs the
++    # project on sys.path and an interpreter that has the dependencies.
++    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
++    interpreter = args.python or sys.executable
++    env["PATH"] = str(Path(interpreter).parent) + os.pathsep + env["PATH"]
+ 
+     scene_prefix = {
+         "ecological": "ECO",
+@@ -80,9 +87,10 @@ def main():
+         env[f"{scene_prefix}_ORDER"] = str(args.max_order)
+     env[f"{scene_prefix}_SAMPLES"] = str(args.n_samples)
+     env[f"{scene_prefix}_NOISE"] = str(args.noise)
+-    if args.python:
+-        env[f"{scene_prefix}_PY"] = args.python
++    env[f"{scene_prefix}_PY"] = interpreter
+     env[f"{scene_prefix}_BIN_THRESH"] = str(args.bin_thresh)
++    env[f"{scene_prefix}_SEED"] = str(args.seed)
++    env["HG_DATA_SEED"] = str(args.seed)
+ 
+     cmd = ["julia", "--project=.", SCENE_TO_SCRIPT[args.scene]]
+     proc = subprocess.run(cmd, cwd=str(THIS_ROOT), env=env, capture_output=True, text=True)
+@@ -92,6 +100,9 @@ def main():
+         raise SystemExit(proc.returncode)
+ 
+     metrics_path = THIS_ROOT / SCENE_TO_METRICS[args.scene]
++    out_dir = Path(args.results_root) / SCENE_REGISTRY[args.scene].label / \
++        f"sample_{args.n_samples}_noise_{args.noise}" / (args.run_tag or "default")
++    out_dir.mkdir(parents=True, exist_ok=True)
+     if not metrics_path.exists():
+         raise RuntimeError(f"Metrics file not found: {metrics_path}")
+ 
+@@ -99,8 +110,11 @@ def main():
+     defaults = HypergraphModel.get_default_params()
+ 
+     auc_scores, extra_metrics = parse_metrics_file(metrics_path)
++    # Normalise "order=k" to the "<k>-edges" convention used by every other method
++    auc_scores = {(f"{k.split('=')[1]}-edges" if k.startswith("order=") else k): v
++                  for k, v in auc_scores.items()}
+     write_standard_summary(
+-        save_dir=str(metrics_path.parent),
++        save_dir=str(out_dir),
+         method="this",
+         scene=SCENE_REGISTRY[args.scene].label,
+         config={
+@@ -112,7 +126,10 @@ def main():
+             "bin_thresh": args.bin_thresh,
+         },
+         auc_scores=auc_scores,
+-        extra_metrics=extra_metrics,
++        extra_metrics={**extra_metrics,
++                       "macro_auc": (sum(v for v in auc_scores.values() if v is not None)
++                                     / max(1, len([v for v in auc_scores.values() if v is not None])))
++                       if any(v is not None for v in auc_scores.values()) else None},
+     )
+     print(f"[unified this] summary written: {metrics_path.parent / 'summary.json'}")
+ 
+diff --git a/models/this/social_export.py b/models/this/social_export.py
+index a794618..88ba986 100644
+--- a/models/this/social_export.py
++++ b/models/this/social_export.py
+@@ -24,6 +24,8 @@ def main():
+     parser.add_argument("--noise", type=float, default=0.0)
+     parser.add_argument("--train_seed", type=int, default=123)
+     parser.add_argument("--test_seed", type=int, default=456)
++    parser.add_argument("--n_nodes", type=int, default=None)
++    parser.add_argument("--max_order", type=int, default=None)
+     parser.add_argument("--out_dir", type=str, default="social-data")
+     args = parser.parse_args()
+ 
+@@ -32,9 +34,11 @@ def main():
+         out_dir = os.path.join(THIS_DIR, out_dir)
+     os.makedirs(out_dir, exist_ok=True)
+ 
++    np.random.seed(args.seed)
++    os.environ.setdefault("HG_DATA_SEED", str(args.seed))
+     defaults = HypergraphModel.get_default_params()
+-    n_nodes = defaults["n_nodes"]
+-    max_order = defaults["max_order"]
++    n_nodes = args.n_nodes or defaults["n_nodes"]
++    max_order = args.max_order or defaults["max_order"]
+     edge_config = HypergraphModel.get_hyperedge_config(n_nodes, max_order=max_order)
+ 
+     edges = [[i - 1, j - 1] for i, j in edge_config.get("edges", [])]

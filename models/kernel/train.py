@@ -221,8 +221,15 @@ def main():
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--n_trajectories", type=int, default=1)
     parser.add_argument("--max_order", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--run_tag", type=str, default=None)
+    parser.add_argument("--max_candidates_per_order", type=int, default=0)
     parser.add_argument("--results_root", type=str, default="results/kernel")
     args = parser.parse_args()
+    import random as _random
+    os.environ['HG_DATA_SEED'] = str(args.seed)
+    _random.seed(args.seed); np.random.seed(args.seed)
+    torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
 
     global HypergraphModel
     HypergraphModel, scene_spec = get_scene_model(args.scene)
@@ -243,14 +250,18 @@ def main():
     theta_ridge = 1e-8
     sigma_list = [0.2, 0.5, 1.0, 2.0]
     gamma_list = [1e-6, 1e-5, 1e-4, 1e-3]
-    max_candidates_per_order = 3000
+    # Was hardcoded to 3000, which silently shrank the neuronal candidate set
+    # from 174406 to 9435 and made its AUC incomparable to the other methods.
+    # 0 (the default) means use the complete candidate set.
+    max_candidates_per_order = (args.max_candidates_per_order
+                                if args.max_candidates_per_order > 0 else 10**9)
 
     candidate_pool = build_candidate_pool(
         n_nodes=n_nodes,
         max_order=max_order,
         edge_config=edge_config,
         max_candidates_per_order=max_candidates_per_order,
-        seed=42,
+        seed=args.seed,
     )
 
     all_possible_torch = {
@@ -265,7 +276,7 @@ def main():
     y_all, f0_all, f_all, z_all, tid_all = [], [], [], [], []
 
     for k in range(max(1, args.n_trajectories)):
-        seed_k = 123 + k
+        seed_k = args.seed + k
         sig = inspect.signature(HypergraphModel.generate_training_data)
         kwargs = {
             "n_samples": args.n_samples,
@@ -324,7 +335,7 @@ def main():
         args.results_root,
         scene_spec.label,
         f"sample_{args.n_samples}_noise_{args.noise}",
-        datetime.now().strftime("%Y%m%d_%H%M%S"),
+        args.run_tag or datetime.now().strftime("%Y%m%d_%H%M%S"),
     )
     os.makedirs(save_dir, exist_ok=True)
 

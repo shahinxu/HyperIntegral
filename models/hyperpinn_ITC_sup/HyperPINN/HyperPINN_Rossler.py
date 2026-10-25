@@ -174,6 +174,7 @@ def main():
     parser.add_argument("--max_order", type=int, default=3, choices=[2, 3])
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--noise", type=float, default=0.0)
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument("--itc_rank", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=14000)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -181,6 +182,11 @@ def main():
     parser.add_argument("--completion_neg_ratio", type=float, default=1.0)
     parser.add_argument("--completion_seed", type=int, default=42)
     args = parser.parse_args()
+    # HYPERPINN_SEEDED: make the baseline reproducible across runs.
+    import random as _random
+    _random.seed(args.seed); np.random.seed(args.seed)
+    torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
+    os.environ['HG_DATA_SEED'] = str(args.seed)
 
     N = args.N
     max_order = args.max_order
@@ -210,7 +216,7 @@ def main():
     )
 
     if noise > 0:
-        np.random.seed()
+        np.random.seed(args.seed)
         X_noisy = X + np.random.randn(*X.shape) * noise
         print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
     else:
@@ -239,7 +245,7 @@ def main():
         plt.grid(True)
     plt.tight_layout()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
     results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
     results_dir = os.path.join(
         results_base,

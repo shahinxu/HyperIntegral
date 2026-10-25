@@ -73,6 +73,18 @@ def run_and_stream(cmd: list[str], *, cwd: str, env: dict[str, str]) -> tuple[in
     return proc.wait(), ''.join(output_lines)
 
 
+
+def parse_auc_from_stdout(stdout: str):
+    """The inner scripts only print their AUCs, they never write auc_scores.txt,
+    so the summary used to come out empty.  Take the last reported line."""
+    pat = re.compile(r"AUC \((\d+-edges)\):\s*([0-9.]+|nan|N/A)")
+    best = {}
+    for ln in stdout.splitlines():
+        found = pat.findall(ln)
+        if found:
+            best = {k: (None if v in ("nan", "N/A") else float(v)) for k, v in found}
+    return best
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--preset', type=str, default=None, choices=sorted(ROSSLER_PRESETS.keys()),
@@ -82,6 +94,8 @@ def main():
     parser.add_argument('--max_order', type=int, default=3)
     parser.add_argument('--gpu_id', type=int, default=0)
     parser.add_argument('--noise', type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument('--tucker_rank', type=int, default=16)
     parser.add_argument('--n_epochs', type=int, default=14000)
     parser.add_argument('--lr', type=float, default=5e-4)
@@ -128,8 +142,12 @@ def main():
         str(args.tmax),
     ]
 
+    cmd.extend(["--seed", str(args.seed)])
+
     env = os.environ.copy()
     env['HYPERPINN_RESULTS_ROOT'] = args.results_root
+    if args.run_tag:
+        env['HYPERPINN_RUN_TAG'] = args.run_tag
     env['PYTHONUNBUFFERED'] = '1'
 
     returncode, combined_output = run_and_stream(cmd, cwd=str(PROJECT_ROOT), env=env)
@@ -146,7 +164,7 @@ def main():
         if not results_path.exists():
             results_path = BASELINE_ROOT / results_dir
 
-    auc_scores = parse_auc_file(results_path / 'auc_scores.txt')
+    auc_scores = parse_auc_from_stdout(combined_output) or parse_auc_file(results_path / 'auc_scores.txt')
     write_standard_summary(
         save_dir=str(results_path),
         method='baseline_hyperpinn_tucker',

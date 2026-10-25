@@ -28,7 +28,15 @@ parser.add_argument('--N', type=int, default=defaults['n_nodes'])
 parser.add_argument('--max_order', type=int, default=3)
 parser.add_argument('--gpu_id', type=int, default=0)
 parser.add_argument('--noise', type=float, default=0.0)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--epochs', type=int, default=14000)
+parser.add_argument('--lr', type=float, default=5e-4)
 args = parser.parse_args()
+# HYPERPINN_SEEDED: make the baseline reproducible across runs.
+import random as _random
+_random.seed(args.seed); np.random.seed(args.seed)
+torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
+os.environ['HG_DATA_SEED'] = str(args.seed)
 
 N = args.N
 max_order = args.max_order
@@ -68,7 +76,7 @@ t_eval, X = RosslerHypergraphModel.generate_training_data(
 )
 
 if noise > 0:
-    np.random.seed()
+    np.random.seed(args.seed)
     X_noisy = X + np.random.randn(*X.shape) * noise
     print(f"Added Gaussian noise with std={noise:.6f} (absolute)")
 else:
@@ -101,7 +109,7 @@ for i in range(N):
     plt.legend()
     plt.grid(True)
 plt.tight_layout()
-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
 results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
 results_dir = os.path.join(
     results_base,
@@ -199,13 +207,13 @@ model.lambda_l1_quads = 0.04
 model.lambda_l0_quads = 0.015
 model.lambda_l1_quints = 0.03
 model.lambda_l0_quints = 0.01
-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 losses = []
 sparsity_stats = []
 t_data = t_data.float().to(device)
 x_data = x_data.float().to(device)
 
-epochs = 14000
+epochs = args.epochs
 stage1_epochs = 2500   
 stage2_epochs = 10000 
 adaptive_weights = True

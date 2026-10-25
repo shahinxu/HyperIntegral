@@ -9,6 +9,7 @@ from pathlib import Path
 import json
 import os
 
+from itertools import combinations
 import numpy as np
 import torch
 from scipy.integrate import solve_ivp
@@ -75,7 +76,12 @@ class HypergraphModel:
     def _resolve_designed_hypergraph_file(params: "HypergraphModel.SimplicialParams") -> Path | None:
         env_path = os.getenv("NEURONAL_HYPERGRAPH_FILE", "").strip()
         if env_path:
-            return Path(env_path)
+            p = Path(env_path)
+            if not p.is_absolute():
+                # Subprocesses (e.g. the Julia THIS driver) run from a different
+                # cwd, so resolve relative paths against the project root.
+                p = Path(__file__).resolve().parents[1] / p
+            return p
 
         if params.designed_hypergraph_file:
             return Path(params.designed_hypergraph_file)
@@ -656,7 +662,19 @@ class HypergraphModel:
 
     @staticmethod
     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
+        """All candidate hyperedges up to max_order.
+
+        Previously returned the ground-truth configuration, which gave callers
+        a candidate pool with no negative examples and therefore undefined AUC.
+        """
+        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
+        out = {k: [] for k in key_by_order.values()}
+        for order in range(2, min(max_order, 5) + 1):
+            out[key_by_order[order]] = [
+                list(e) for e in combinations(range(1, n_nodes + 1), order)
+            ]
+        return out
+
 
     @staticmethod
     def generate_training_data(n_nodes: int, edge_config: dict, n_samples: int = 11, noise: float = 0.0):
@@ -691,7 +709,11 @@ class HypergraphModel:
 
     @staticmethod
     def get_default_params() -> dict:
-        designed = HypergraphModel._load_designed_hypergraph(HypergraphModel._preset_hypergraph_file())
+        # Resolve through the same path as everything else, so NEURONAL_HYPERGRAPH_FILE
+        # selects the preset here too instead of always reporting the built-in one.
+        designed = HypergraphModel._load_designed_hypergraph(
+            HypergraphModel._resolve_designed_hypergraph_file(HypergraphModel.SimplicialParams())
+        )
         return {
             "n_nodes": designed["n_nodes"],
             "max_order": designed["max_order"],

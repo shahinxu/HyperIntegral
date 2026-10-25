@@ -23,7 +23,16 @@ parser = argparse.ArgumentParser(description='Run HyperPINN on ecological hyperg
 parser.add_argument('--M', type=int, default=300, help='Number of time samples')
 parser.add_argument('--gpu_id', type=int, default=4)
 parser.add_argument('--noise', type=float, default=0.0)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--epochs', type=int, default=14000)
+parser.add_argument('--lr', type=float, default=5e-4)
+parser.add_argument('--max_order', type=int, default=None)
 args = parser.parse_args()
+# HYPERPINN_SEEDED: reproducible across runs.
+import random as _random
+_random.seed(args.seed); np.random.seed(args.seed)
+torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
+os.environ['HG_DATA_SEED'] = str(args.seed)
 
 gpu_id = args.gpu_id
 noise = args.noise
@@ -49,12 +58,16 @@ QuintList = QuintList_full
 SextList = SextList_full
 SeptList = SeptList_full
 
-all_2edges = edge_config.get('edges', [])
-all_3edges = edge_config.get('triangles', [])
-all_4edges = edge_config.get('quads', [])
-all_5edges = edge_config.get('quints', [])
-all_6edges = edge_config.get('sexts', [])
-all_7edges = edge_config.get('septs', [])
+# The candidate sets must be the full combinatorial pool, not the ground-truth
+# configuration: using edge_config here left every y_true all-ones, so every
+# AUC came out as nan.
+_all_possible = HypergraphModel.generate_all_possible_hyperedges(N, max_order)
+all_2edges = _all_possible.get('edges', [])
+all_3edges = _all_possible.get('triangles', [])
+all_4edges = _all_possible.get('quads', [])
+all_5edges = _all_possible.get('quints', [])
+all_6edges = _all_possible.get('sexts', [])
+all_7edges = _all_possible.get('septs', [])
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
@@ -95,7 +108,7 @@ for i in range(N):
     plt.legend()
     plt.grid(True)
 plt.tight_layout()
-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+timestamp = os.environ.get('HYPERPINN_RUN_TAG') or datetime.now().strftime('%Y%m%d_%H%M%S')
 results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
 results_dir = os.path.join(
     results_base,
@@ -216,13 +229,13 @@ model.lambda_l1_sexts = 0.025
 model.lambda_l0_sexts = 0.008
 model.lambda_l1_septs = 0.02
 model.lambda_l0_septs = 0.005
-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 losses = []
 sparsity_stats = []
 t_data = t_data.float().to(device)
 x_data = x_data.float().to(device)
 
-epochs = 14000
+epochs = args.epochs
 stage1_epochs = 2500   
 stage2_epochs = 10000 
 adaptive_weights = True
@@ -279,6 +292,18 @@ def evaluate_edges_triangles(
     y_true_5, y_score_5 = get_labels_and_scores(all_5edges, true_5edges, quint_scores)
     y_true_6, y_score_6 = get_labels_and_scores(all_6edges, true_6edges, sext_scores)
     y_true_7, y_score_7 = get_labels_and_scores(all_7edges, true_7edges, sept_scores)
+
+    # This return was missing, so the function always yielded None and the
+    # caller crashed before any AUC could be reported for this scene.
+    return (
+        y_true_2, y_score_2,
+        y_true_3, y_score_3,
+        y_true_4, y_score_4,
+        y_true_5, y_score_5,
+        y_true_6, y_score_6,
+        y_true_7, y_score_7,
+    )
+
 
 def compute_auc(y_true, y_score):
     fpr, tpr, _ = roc_curve(y_true, y_score)

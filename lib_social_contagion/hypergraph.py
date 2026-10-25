@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import os
 
+from itertools import combinations
 import numpy as np
 import torch
 from scipy.integrate import solve_ivp
@@ -416,7 +417,18 @@ class HypergraphModel:
 
     @staticmethod
     def generate_all_possible_hyperedges(n_nodes: int, max_order: int) -> dict:
-        return HypergraphModel.get_hyperedge_config(n_nodes, max_order)
+        """All candidate hyperedges up to max_order.
+
+        Previously returned the ground-truth configuration, which gave callers
+        a candidate pool with no negative examples and therefore undefined AUC.
+        """
+        key_by_order = {2: "edges", 3: "triangles", 4: "quads", 5: "quints"}
+        out = {k: [] for k in key_by_order.values()}
+        for order in range(2, min(max_order, 5) + 1):
+            out[key_by_order[order]] = [
+                list(e) for e in combinations(range(1, n_nodes + 1), order)
+            ]
+        return out
 
 
     @staticmethod

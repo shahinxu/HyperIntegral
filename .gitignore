@@ -11,3 +11,5 @@ results/
 *.pth
 *.png
 *.pdf
+# Scene presets define the benchmarks and must be versioned
+!lib_*/presets/*.json

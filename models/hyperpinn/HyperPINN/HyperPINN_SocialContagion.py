@@ -22,14 +22,23 @@ parser = argparse.ArgumentParser(description="Run HyperPINN on social contagion 
 parser.add_argument("--M", type=int, default=300, help="Number of time samples")
 parser.add_argument("--gpu_id", type=int, default=0)
 parser.add_argument("--noise", type=float, default=0.0)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--epochs', type=int, default=14000)
+parser.add_argument('--lr', type=float, default=5e-4)
+parser.add_argument('--max_order', type=int, default=None)
 args = parser.parse_args()
+# HYPERPINN_SEEDED: reproducible across runs.
+import random as _random
+_random.seed(args.seed); np.random.seed(args.seed)
+torch.manual_seed(args.seed); torch.cuda.manual_seed_all(args.seed)
+os.environ['HG_DATA_SEED'] = str(args.seed)
 
 M = args.M
 gpu_id = args.gpu_id
 noise = args.noise
 defaults = SCMHypergraphModel.get_default_params()
 N = defaults["n_nodes"]
-max_order = defaults["max_order"]
+max_order = args.max_order if args.max_order is not None else defaults["max_order"]
 
 # ---------------------------------------------------------------------------
 # Ground-truth hypergraph and data generation
@@ -39,18 +48,24 @@ edge_config = SCMHypergraphModel.get_hyperedge_config(N, max_order)
 EdgeList = np.array(edge_config.get("edges", [])) if edge_config.get("edges") else np.empty((0, 2), dtype=int)
 TriangleList = np.array(edge_config.get("triangles", [])) if edge_config.get("triangles") else np.empty((0, 3), dtype=int)
 QuadList = np.array(edge_config.get("quads", [])) if edge_config.get("quads") else np.empty((0, 4), dtype=int)
+QuintList = np.array(edge_config.get("quints", [])) if edge_config.get("quints") else np.empty((0, 5), dtype=int)
 
-all_2edges = edge_config.get("edges", [])
-all_3edges = edge_config.get("triangles", [])
-all_4edges = edge_config.get("quads", [])
-all_5edges = edge_config.get("quints", [])
+# Candidate sets must be the full combinatorial pool, not the ground-truth
+# configuration, otherwise every y_true is all-ones and the AUCs are nan.
+_all_possible = SCMHypergraphModel.generate_all_possible_hyperedges(N, max_order)
+all_2edges = _all_possible.get("edges", [])
+all_3edges = _all_possible.get("triangles", [])
+all_4edges = _all_possible.get("quads", [])
+all_5edges = _all_possible.get("quints", [])
 all_6edges = []
 all_7edges = []
 
 true_2edges = set(tuple(sorted(edge)) for edge in EdgeList)
 true_3edges = set(tuple(sorted(triangle)) for triangle in TriangleList)
 true_4edges = set(tuple(sorted(quad)) for quad in QuadList)
-true_5edges = set(tuple(sorted(edge)) for edge in all_5edges)
+# Was built from all_5edges (the candidate set), which labelled every
+# 5-edge candidate as positive and left the order-5 AUC undefined.
+true_5edges = set(tuple(sorted(quint)) for quint in QuintList)
 true_6edges = set()
 true_7edges = set()
 
@@ -82,7 +97,7 @@ for i in range(N):
     plt.grid(True)
 plt.tight_layout()
 
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+timestamp = os.environ.get("HYPERPINN_RUN_TAG") or datetime.now().strftime("%Y%m%d_%H%M%S")
 results_base = os.environ.get("HYPERPINN_RESULTS_ROOT", os.path.join("results", "hyperpinn"))
 results_dir = os.path.join(
     results_base,
@@ -209,14 +224,14 @@ model.lambda_l1_triangles = 0.05
 model.lambda_l0_edges = 0.01
 model.lambda_l0_triangles = 0.02
 # higher-order lambdas unused here but present on the model
-optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
 losses = []
 sparsity_stats = []
 t_data = t_data.float().to(device)
 x_data = x_data.float().to(device)
 
-epochs = 14000
+epochs = args.epochs
 stage1_epochs = 2500
 stage2_epochs = 10000
 adaptive_weights = True
@@ -585,6 +600,9 @@ for epoch in range(epochs):
         if max_order >= 4:
             auc_4 = compute_auc(y_true_4, y_score_4)
             auc_str += f", AUC (4-edges): {auc_4:.4f}"
+        if max_order >= 5:
+            auc_5 = compute_auc(y_true_5, y_score_5)
+            auc_str += f", AUC (5-edges): {auc_5:.4f}"
         print(auc_str)
 
 # ---------------------------------------------------------------------------

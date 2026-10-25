@@ -257,8 +257,106 @@ def suite_sparsity(cfg):
     return jobs
 
 
+
+# --- paper baselines (HyperPINN family) -----------------------------------
+# cp / ITC_0 / ITC_sup only support max_order <= 3, so any comparison that
+# includes them has to be run at max_order 3.
+HYPERPINN_METHODS = {
+    "hyperpinn":              {"scene_arg": "scene", "python": True,  "max_order": 5},
+    "hyperpinn_base":         {"scene_arg": "preset", "python": True,  "max_order": 5},
+    "hyperpinn_cp":           {"scene_arg": "preset", "python": True,  "max_order": 3},
+    "hyperpinn_tucker":       {"scene_arg": "preset", "python": False, "max_order": 5},
+    "hyperpinn_tensor_train": {"scene_arg": "preset", "python": False, "max_order": 5},
+    "hyperpinn_ITC_0":        {"scene_arg": "preset", "python": True,  "max_order": 3},
+    "hyperpinn_ITC_sup":      {"scene_arg": "preset", "python": True,  "max_order": 3},
+}
+
+
+def _hyperpinn_job(name, method, n_nodes, max_order, n_samples, noise, seed,
+                   n_epochs, lr, extra=(), meta_extra=None):
+    spec = HYPERPINN_METHODS[method]
+    cli = ["--n_samples", str(n_samples), "--noise", str(noise),
+           "--max_order", str(max_order), "--n_epochs", str(n_epochs),
+           "--lr", str(lr), "--seed", str(seed)]
+    if spec["scene_arg"] == "scene":
+        cli += ["--scene", "rossler", "--n_nodes", str(n_nodes)]
+    else:
+        cli += ["--preset", f"n{n_nodes}"]
+    if spec["python"]:
+        cli += ["--python", PYTHON]
+    cli += list(extra)
+    meta = {"method": method, "scene": "rossler", "n_nodes": n_nodes,
+            "noise": noise, "seed": seed, "n_samples": n_samples,
+            "max_order": max_order}
+    meta.update(meta_extra or {})
+    return Job(name, f"models.{method}.run", cli, meta, rossler_env(n_nodes))
+
+
+def suite_baselines(cfg):
+    """The paper's own baselines against our method, matched budget.
+
+    Run at max_order 3 by default because the low-rank variants (cp, ITC) cap
+    there; running everything at the same order is what makes the comparison
+    legitimate.
+    """
+    jobs = []
+    mo = cfg["baseline_max_order"]
+    for scene, n_nodes, _ in cfg["scenes"]:
+        if scene != "rossler":
+            continue
+        for noise in cfg["noises"]:
+            for seed in cfg["seeds"]:
+                base = f"rossler{n_nodes}_noise{noise}_seed{seed}"
+                jobs.append(_integral_job(
+                    f"ours_{base}", scene, n_nodes, mo, cfg["n_samples"], noise,
+                    seed, cfg["n_epochs"], cfg["lr"],
+                    meta_extra={"variant": "ours", "max_order": mo},
+                    cfg_max_cand=cfg["max_cand"]))
+                for method in cfg["baseline_methods"]:
+                    if HYPERPINN_METHODS[method]["max_order"] < mo:
+                        continue
+                    jobs.append(_hyperpinn_job(
+                        f"{method}_{base}", method, n_nodes, mo, cfg["n_samples"],
+                        noise, seed, cfg["baseline_epochs"], cfg["baseline_lr"],
+                        meta_extra={"variant": method}))
+    return jobs
+
+
+def suite_baseline_tuning(cfg):
+    """Equal-budget grid for every paper baseline and for our method:
+    4 learning rates x 2 epoch budgets = 8 configurations each."""
+    jobs = []
+    mo = cfg["baseline_max_order"]
+    seed = cfg["seeds"][0]
+    lrs = [1e-4, 5e-4, 1e-3, 5e-3]
+    budgets = [7000, 14000]
+    for scene, n_nodes, _ in cfg["scenes"]:
+        if scene != "rossler":
+            continue
+        for noise in cfg["noises"]:
+            for method in cfg["baseline_methods"]:
+                if HYPERPINN_METHODS[method]["max_order"] < mo:
+                    continue
+                for lr in lrs:
+                    for ep in budgets:
+                        jobs.append(_hyperpinn_job(
+                            f"tune_{method}_lr{lr}_ep{ep}_n{n_nodes}_noise{noise}",
+                            method, n_nodes, mo, cfg["n_samples"], noise, seed, ep, lr,
+                            meta_extra={"variant": f"tune_{method}", "lr": lr, "epochs": ep}))
+            for lr in lrs:
+                for ep in budgets:
+                    jobs.append(_integral_job(
+                        f"tune_ours_lr{lr}_ep{ep}_n{n_nodes}_noise{noise}",
+                        scene, n_nodes, mo, cfg["n_samples"], noise, seed, ep, lr,
+                        meta_extra={"variant": "tune_ours", "lr": lr, "epochs": ep},
+                        cfg_max_cand=cfg["max_cand"]))
+    return jobs
+
+
 SUITES = {
     "main": suite_main,
+    "baselines": suite_baselines,
+    "baseline_tuning": suite_baseline_tuning,
     "sparsity": suite_sparsity,
     "diagnostic": suite_diagnostic,
     "ablation": suite_ablation,
@@ -326,6 +424,18 @@ def main():
     ap.add_argument("--sindy_window", type=int, default=20)
     ap.add_argument("--sigma_h_samples", type=int, nargs="+", default=[100, 200, 300, 600])
     ap.add_argument("--sigma_h_noises", type=float, nargs="+", default=[0.0, 0.01, 0.05, 0.1])
+    ap.add_argument("--baseline_max_order", type=int, default=5,
+                    help="Order at which the baseline comparison runs. Only the "
+                         "cp/ITC variants cap at 3; HyperPINN itself runs at 5.")
+    ap.add_argument("--baseline_methods", type=str, nargs="+",
+                    default=["hyperpinn_base"],
+                    help="Which baselines to include. Defaults to hyperpinn_base, which IS "
+                         "HyperPINN -- the only baseline the reviewers name. On Rossler it is "
+                         "identical to `hyperpinn` except for a vmap/jacrev time derivative "
+                         "that is simply faster; `hyperpinn` is the slower multi-scene build. "
+                         "The low-rank tensor-decomposition variants are out of scope.")
+    ap.add_argument("--baseline_epochs", type=int, default=14000)
+    ap.add_argument("--baseline_lr", type=float, default=5e-4)
     ap.add_argument("--max_cand", type=int, default=0,
                     help="Subsample negative candidates to this many per order (0 = full).")
     ap.add_argument("--l1_weights", type=float, nargs="+", default=[0.0, 1e-4, 1e-3, 1e-2],
@@ -347,7 +457,11 @@ def main():
            "sindy_threshold": args.sindy_threshold, "sindy_window": args.sindy_window,
            "sigma_h_samples": args.sigma_h_samples, "sigma_h_noises": args.sigma_h_noises,
            "diag_samples": args.diag_samples, "max_cand": args.max_cand,
-           "l1_weights": args.l1_weights}
+           "l1_weights": args.l1_weights,
+           "baseline_max_order": args.baseline_max_order,
+           "baseline_epochs": args.baseline_epochs,
+           "baseline_lr": args.baseline_lr,
+           "baseline_methods": args.baseline_methods}
 
     jobs = SUITES[args.suite](cfg)
     out_root = Path(args.out)
