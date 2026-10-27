@@ -26,6 +26,7 @@ parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--epochs', type=int, default=14000)
 parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--max_order', type=int, default=None)
+parser.add_argument('--max_candidates_per_order', type=int, default=0)
 args = parser.parse_args()
 # HYPERPINN_SEEDED: reproducible across runs.
 import random as _random
@@ -52,7 +53,21 @@ QuintList = np.array(edge_config.get("quints", [])) if edge_config.get("quints")
 
 # Candidate sets must be the full combinatorial pool, not the ground-truth
 # configuration, otherwise every y_true is all-ones and the AUCs are nan.
-_all_possible = NSHypergraphModel.generate_all_possible_hyperedges(N, max_order)
+# Candidate set. On n=30 the full set is 174406 hyperedges, while every other
+# method is run on a subsampled pool (3000 negatives per order, all true edges
+# kept) because the kernel baseline cannot solve the full system. Scoring
+# HyperPINN against 18x more negatives would not be comparable, so it takes the
+# same subsample when --max_candidates_per_order is given.
+if args.max_candidates_per_order and args.max_candidates_per_order > 0:
+    import sys as _sys, os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from models.integral.train import build_orderwise_support_sampled
+    _all_possible = build_orderwise_support_sampled(
+        N, max_order, args.max_candidates_per_order, edge_config, seed=args.seed)
+else:
+    _all_possible = NSHypergraphModel.generate_all_possible_hyperedges(N, max_order)
 all_2edges = _all_possible.get("edges", [])
 all_3edges = _all_possible.get("triangles", [])
 all_4edges = _all_possible.get("quads", [])

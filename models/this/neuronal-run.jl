@@ -127,7 +127,8 @@ function main()
     mkpath(data_dir)
 
     py = get(ENV, "NS_PY", "python")
-    cmd = `$py $(joinpath(@__DIR__, "neuronal_export.py")) --n_nodes $n_nodes --max_order $max_order --n_samples $n_samples --noise $noise --out_dir $data_dir`
+    max_cand = parse(Int, get(ENV, "NS_MAX_CAND", "0"))
+    cmd = `$py $(joinpath(@__DIR__, "neuronal_export.py")) --n_nodes $n_nodes --max_order $max_order --n_samples $n_samples --noise $noise --max_candidates_per_order $max_cand --out_dir $data_dir`
     println("[THIS neuronal] exporting data via: ", cmd)
     run(cmd)
 
@@ -161,7 +162,16 @@ function main()
         inf = inferred_hyperedges_from_scores(score_map, bin_thresh)
         tp, fp, fn, prec, rec, f1 = prf(inf, tru)
 
-        all_edges = [Tuple(c) for c in combinations(1:n_nodes, o)]
+        # Score against the shared candidate pool when the Python side exported
+        # one, so THIS sees the same negatives as every other method; fall back
+        # to the full combinatorial set otherwise.
+        cand_path = joinpath(data_dir, "candidates.json")
+        all_edges = if isfile(cand_path)
+            pool = JSON.parsefile(cand_path)
+            [Tuple(Int.(e)) for e in get(pool, string(o), Any[])]
+        else
+            [Tuple(c) for c in combinations(1:n_nodes, o)]
+        end
         y_true = [e in tru ? 1 : 0 for e in all_edges]
         y_score = [get(score_map, e, 0.0) for e in all_edges]
         auc = auc_roc(y_true, y_score)

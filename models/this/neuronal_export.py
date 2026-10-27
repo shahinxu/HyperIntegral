@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--n_nodes", type=int, default=None)
     parser.add_argument("--max_order", type=int, default=None)
+    parser.add_argument("--max_candidates_per_order", type=int, default=0)
     parser.add_argument("--out_dir", type=str, default="neuronal-data")
     args = parser.parse_args()
 
@@ -69,6 +70,22 @@ def main():
             ensure_ascii=False,
             indent=2,
         )
+
+    # Every other method on this scene is scored against a subsampled candidate
+    # pool (all true hyperedges plus a capped number of negatives per order),
+    # because the kernel baseline cannot solve the full 174406-column system.
+    # Export the same pool so THIS is scored against identical negatives.
+    if args.max_candidates_per_order:
+        from models.integral.train import build_orderwise_support_sampled
+        sup = build_orderwise_support_sampled(
+            n_nodes, max_order, args.max_candidates_per_order, edge_config, seed=_seed)
+        order_of = {"edges": 2, "triangles": 3, "quads": 4, "quints": 5}
+        pool = {str(o): [[int(v) for v in e] for e in sup.get(k, [])]
+                for k, o in order_of.items()}
+        with open(os.path.join(out_dir, "candidates.json"), "w") as f:
+            json.dump(pool, f)
+        print("Exported candidate pool: "
+              + ", ".join(f"order{o}={len(v)}" for o, v in sorted(pool.items())))
 
     print(f"Exported neuronal data to: {out_dir}")
 

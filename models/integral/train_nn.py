@@ -271,7 +271,7 @@ def train(
     n_samples=300, noise=0.02, n_epochs=20000, lr=1e-3, seed=42, gpu_id=0,
     stage1_epochs=2500, physics_ramp_epochs=2000, lambda_physics=1.0,
     n_intervals=64, n_quad=5, window_frac=0.5, loss_mode="integral",
-    bounded=True, no_clip=False, clip_c=2.0, chunk_size=20000, w_init=-1.5,
+    bounded=True, no_clip=False, clip_c=2.0, chunk_size=20000, w_init=-1.5, l1_weight=0.0,
     nn_hidden_dim=64, nn_layers=8, results_root="results/integral_nn",
     run_tag=None, eval_every=500,
 ):
@@ -292,7 +292,7 @@ def train(
     n_times, _, state_dim = x_data.shape
     print(f"data: {x_data.shape}  binary_scene={is_binary}")
 
-    t_gpu = torch.tensor(t_data, dtype=torch.float32, device=device).unsqueeze(1)   # [T,1]
+    t_gpu = torch.tensor(t_data, dtype=torch.float32, device=device)   # [T]
     x_obs = torch.tensor(x_data, dtype=torch.float32, device=device)                # [T,N,d]
     x_obs_flat = state_to_flat(x_obs, N, state_dim)                                 # [T,N*d]
 
@@ -361,11 +361,22 @@ def train(
 
         x_pred_flat = net(t_gpu, normalize=True)
         if is_binary:
-            # Binary observations: Bernoulli cross-entropy instead of MSE.
-            p = torch.clamp(x_pred_flat, 1e-4, 1.0 - 1e-4)
+            # Binary observations: the surrogate models an infection
+            # probability, so squash it into (0,1) with a sigmoid. Clamping
+            # instead leaves zero gradient whenever the raw output falls
+            # outside the interval, which stalled the surrogate completely.
+            x_pred_flat = torch.sigmoid(x_pred_flat)
+            assert x_pred_flat.shape == x_obs_flat.shape, (
+                f"binary data-loss shape mismatch {tuple(x_pred_flat.shape)} vs "
+                f"{tuple(x_obs_flat.shape)}")
+            p = x_pred_flat.clamp(1e-6, 1.0 - 1e-6)
             loss_data = -(x_obs_flat * torch.log(p)
                           + (1.0 - x_obs_flat) * torch.log(1.0 - p)).mean()
         else:
+            assert x_pred_flat.shape == x_obs_flat.shape, (
+                f"data-loss shape mismatch {tuple(x_pred_flat.shape)} vs "
+                f"{tuple(x_obs_flat.shape)}: these would broadcast instead of "
+                f"aligning, silently comparing every time against every other")
             loss_data = torch.mean((x_pred_flat - x_obs_flat) ** 2)
 
         # Bounded tensor parameterization (paper, Sec. III-A):
@@ -375,25 +386,33 @@ def train(
         # for. no_clip keeps the sigmoid but drops only the pre-activation clip.
         if not bounded:
             A_eff = W
-        elif no_clip:
-            A_eff = torch.sigmoid(W)
         else:
-            A_eff = torch.sigmoid(torch.clamp(W, -clip_c, clip_c))
+            # Bhat = sigmoid(clip(W, -c, c)). The clip is enforced by projecting
+            # W back into [-c, c] after each optimizer step (below) rather than
+            # by clamping inside the graph: torch.clamp has zero gradient
+            # outside the interval, so any entry that drifted past +-c froze
+            # permanently and could never return, which made the solution
+            # depend on which entries happened to saturate first.
+            A_eff = torch.sigmoid(W)
         _cell[0] = A_eff
 
         if epoch < stage1_epochs:
             loss_phys = torch.zeros((), device=device)
         elif loss_mode == "derivative":
             tc = t0 + span * torch.rand(n_intervals, device=device)
-            tc = tc.unsqueeze(1).requires_grad_(True)
+            tc = tc.requires_grad_(True)
             xc_flat = net(tc, normalize=True)
+            if is_binary:
+                xc_flat = torch.sigmoid(xc_flat)
             dxdt_flat = torch.stack([
                 torch.autograd.grad(xc_flat[:, i].sum(), tc,
-                                    create_graph=True, retain_graph=True)[0].squeeze(-1)
+                                    create_graph=True, retain_graph=True)[0]
                 for i in range(xc_flat.shape[1])], dim=1)
             xc = flat_to_state(xc_flat, N, state_dim)
             rhs = dyn(xc, tc.squeeze(-1))
-            loss_phys = torch.mean((flat_to_state(dxdt_flat, N, state_dim) - rhs) ** 2)
+            _d = flat_to_state(dxdt_flat, N, state_dim)
+            assert _d.shape == rhs.shape, f"derivative residual shape {tuple(_d.shape)} vs {tuple(rhs.shape)}"
+            loss_phys = torch.mean((_d - rhs) ** 2)
         else:
             ta = t0 + (span - max_window) * torch.rand(n_intervals, device=device) \
                  if max_window < span else t0 + span * torch.rand(n_intervals, device=device)
@@ -402,13 +421,19 @@ def train(
             mid, half = 0.5 * (ta + tb), 0.5 * (tb - ta)
 
             t_eval = mid[:, None] + half[:, None] * quad_nodes[None, :]       # [B,Q]
-            x_eval = flat_to_state(net(t_eval.reshape(-1, 1), normalize=True),
-                                   N, state_dim)                              # [B*Q,N,d]
+            _xe = net(t_eval.reshape(-1), normalize=True)
+            if is_binary:
+                _xe = torch.sigmoid(_xe)
+            x_eval = flat_to_state(_xe, N, state_dim)                              # [B*Q,N,d]
             dyn_vals = dyn(x_eval, t_eval.reshape(-1)).view(n_intervals, n_quad, N, state_dim)
             integral = torch.einsum('bqni,q->bni', dyn_vals, quad_weights) * half[:, None, None]
 
-            lhs = flat_to_state(net(tb.unsqueeze(1), normalize=True)
-                                - net(ta.unsqueeze(1), normalize=True), N, state_dim)
+            _xb, _xa = net(tb, normalize=True), net(ta, normalize=True)
+            if is_binary:
+                _xb, _xa = torch.sigmoid(_xb), torch.sigmoid(_xa)
+            lhs = flat_to_state(_xb - _xa, N, state_dim)
+            assert lhs.shape == integral.shape, (
+                f"integral residual shape {tuple(lhs.shape)} vs {tuple(integral.shape)}")
             loss_phys = torch.mean((lhs - integral) ** 2)
 
         if epoch < stage1_epochs:
@@ -420,8 +445,16 @@ def train(
                 1.0, (epoch - stage1_epochs) / float(physics_ramp_epochs))
 
         total = loss_data + w_phys * loss_phys
+        if l1_weight > 0:
+            # Explicit sparsity on the interaction tensor, for the ablation the
+            # reviewer asks for: the proposed parameterization has none.
+            total = total + l1_weight * A_eff.abs().mean()
         total.backward()
         opt.step()
+
+        if bounded and not no_clip:
+            with torch.no_grad():
+                W.clamp_(-clip_c, clip_c)
 
         pbar.set_postfix({"L": f"{total.item():.3e}", "Ld": f"{loss_data.item():.2e}",
                           "Lp": f"{float(loss_phys):.2e}", "w": f"{w_phys:.2f}"})
@@ -463,6 +496,8 @@ def main():
     ap.add_argument("--no_clip", type=int, default=0,
                     help="1: keep the sigmoid but drop the pre-activation clip only.")
     ap.add_argument("--clip_c", type=float, default=2.0)
+    ap.add_argument("--l1", type=float, default=0.0,
+                    help="L1 penalty on the interaction tensor (0 = none).")
     ap.add_argument("--w_init", type=float, default=-1.5,
                     help="Weak-coupling init for the pre-activation; sigmoid(w_init) is the initial interaction strength of every candidate.")
     ap.add_argument("--chunk_size", type=int, default=20000)
@@ -523,7 +558,7 @@ def main():
                 "noise": args.noise, "n_epochs": args.n_epochs, "lr": args.lr,
                 "seed": args.seed, "loss_mode": args.loss_mode,
                 "bounded": bool(args.bounded), "no_clip": bool(args.no_clip),
-            "clip_c": args.clip_c, "w_init": args.w_init,
+            "clip_c": args.clip_c, "w_init": args.w_init, "l1": args.l1,
                 "stage1_epochs": args.stage1_epochs,
                 "physics_ramp_epochs": args.physics_ramp_epochs,
                 "lambda_physics": args.lambda_physics,
@@ -531,7 +566,13 @@ def main():
                 "window_frac": args.window_frac,
                 "max_candidates_per_order": args.max_candidates_per_order},
         auc_scores=auc_scores,
-        extra_metrics={"macro_auc": macro_auc(auc_scores), "library_size": int(W.shape[0])},
+        extra_metrics={
+            "macro_auc": macro_auc(auc_scores),
+            "library_size": int(W.shape[0]),
+            # Number of candidates the model keeps, i.e. Bhat above 0.5
+            # (W > 0 under the sigmoid). Comparable to SINDy's n_nonzero.
+            "n_nonzero": int((W.reshape(-1) > 0).sum()),
+        },
     )
     print(f"\nResults saved to {save_dir}/")
 

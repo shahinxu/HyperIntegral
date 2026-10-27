@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--gpu_id", type=int, default=0)
     parser.add_argument("--noise", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max_candidates_per_order", type=int, default=0)
     parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument("--n_epochs", type=int, default=20000)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -111,6 +112,8 @@ def main():
         cmd.extend(["--max_order", str(effective_max_order)])
 
     cmd.extend(["--seed", str(args.seed)])
+    if args.max_candidates_per_order:
+        cmd.extend(["--max_candidates_per_order", str(args.max_candidates_per_order)])
 
     cmd.extend(["--epochs", str(args.n_epochs), "--lr", str(args.lr)])
 

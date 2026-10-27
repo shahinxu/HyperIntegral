@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--n_trajectories", type=int, default=1)
     parser.add_argument("--results_root", type=str, default="results_this")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max_candidates_per_order", type=int, default=0)
     parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
@@ -100,7 +101,13 @@ def main():
     env[f"{scene_prefix}_PY"] = interpreter
     env[f"{scene_prefix}_BIN_THRESH"] = str(args.bin_thresh)
     env[f"{scene_prefix}_SEED"] = str(args.seed)
+    # social-run.jl reads SC_GRAPH_SEED / SC_TRAIN_SEED / SC_TEST_SEED, not
+    # SC_SEED, so every seed produced an identical run (std = 0 across seeds).
+    env[f"{scene_prefix}_GRAPH_SEED"] = str(args.seed)
+    env[f"{scene_prefix}_TRAIN_SEED"] = str(args.seed + 100)
+    env[f"{scene_prefix}_TEST_SEED"] = str(args.seed + 200)
     env["HG_DATA_SEED"] = str(args.seed)
+    env[f"{scene_prefix}_MAX_CAND"] = str(args.max_candidates_per_order)
 
     cmd = ["julia", "--project=.", SCENE_TO_SCRIPT[args.scene]]
     proc = subprocess.run(cmd, cwd=str(THIS_ROOT), env=env, capture_output=True, text=True)
