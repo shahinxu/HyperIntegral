@@ -163,16 +163,25 @@ the manifests alone.
 
 ## 6. State at handoff
 
-Coverage 149/164 (91%). Complete: R1.4, R1.5a, R1.5b, R2.5a, R2.5b, R2.5c,
-R3.7a, R3.7b, R3.7c.
+Coverage 155/164 (95%). Complete: R1.4, R1.5a, R1.5b, R2.5a, R2.5b, R2.5c,
+R2.6b, R3.7a, R3.7b, R3.7c. The ceiling is 160/164 — see the four annotated
+THIS cells below.
+
+Every sweep was stopped cleanly before the machine change; no process is left
+running. The ecological and social tuning sweep finished (160/160 runs), so
+R2.6b and the ecological/social half of R2.6c are measured and final.
 
 Still filling, blocked only on sweeps that were running:
 
-- **R2.6b** — the Configurations count for Kernel-based and THIS. Their stale
-  records were deleted (bug 12) and the grids are rerunning from zero.
-- **R2.6c** — Kernel-based and THIS on ecological and social; HyperPINN,
-  Kernel-based and Integral SINDy on neuronal.
-- **R3.6b** — neuronal HyperPINN and Kernel-based.
+- **R2.6c** — HyperPINN, Kernel-based and Integral SINDy on neuronal. Needs
+  the `tuning` suite on `--scenes neuronal`; 19 of its 48 jobs are recorded.
+- **R3.6b** — neuronal HyperPINN and Kernel-based. Needs the `noise` suite on
+  `--scenes neuronal`; 28 of its 54 jobs are recorded.
+
+Both are slow for the same reason: at n=30 a single kernel or HyperPINN run
+takes 20-35 minutes, and the kernel baseline is CPU-bound (it was observed at
+450-600% CPU with the GPU idle), so `--jobs_per_gpu` does not govern its
+throughput. Budget a few hours of wall clock, not minutes.
 
 Permanently empty, correctly annotated: the three THIS neuronal cells (R2.6a,
 R3.6a, R3.6b) and the R2.6c THIS neuronal row.
