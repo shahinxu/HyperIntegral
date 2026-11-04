@@ -185,6 +185,36 @@ groups by noise. The three numbers disagreeing with each other is what made
 the defect visible.
 *Fix:* `load(..., noise=MAIN_NOISE)` keeps only runs at the main noise level.
 
+## Open finding, not fixed: the Ours means in R2.5a and R3.7c are not in the records
+
+Checked cell by cell against every recorded run at the main noise level:
+
+| Table | means matching the records | standard deviations matching |
+|---|---|---|
+| R3.7c (all 48 cells) | 0/48 | 48/48 |
+| R2.5a, Derivative rows | 4/4 per row | 4/4 per row |
+| R2.5a, Integral (ours) rows | 0/4 per row | 4/4 per row |
+
+The agreement on the standard deviations is exact to the last digit, so those
+came from the runs; the means paired with them did not. The Derivative rows,
+which are not Ours rows, match on both.
+
+This changes the direction of the comparison the tables are making. Measured
+macro-AUC at sigma=0.02, three seeds:
+
+| Scene | Integral (`full`) | Derivative (`derivative_loss`) | measured | as printed |
+|---|---|---|---|---|
+| ecological | 0.447 +- 0.028 | 0.672 +- 0.018 | -0.225 | +0.061 |
+| social | 0.612 +- 0.084 | 0.536 +- 0.007 | +0.076 | +0.183 |
+| neuronal | 0.495 +- 0.036 | 0.518 +- 0.037 | -0.023 | +0.159 |
+
+Left exactly as it is. These are Ours rows, which are maintained by hand and
+which this work is under instruction not to touch, and the discrepancy is not
+a code defect: the pipeline reproduces the recorded runs correctly. Deciding
+what the tables should say is the author's call, not something to patch.
+
+Reproduce with `experiments/check_ours_rows.py`.
+
 ## Infrastructure added
 
 - `experiments/paper_sweep.py` — the six suites, resumable: each finished run is
