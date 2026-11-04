@@ -129,6 +129,23 @@ exists. The row now matches the others.
 nothing. Run under an interpreter that has scipy, or every confidence interval
 in the document silently narrows (for n=10, 2.262 -> 1.96).
 
+**19. The noise sweep queued THIS on the neuronal scene — `experiments/paper_sweep.py`**
+`suite_main` already skipped it (THIS never terminates at n=30), but
+`suite_noise` did not, so 18 jobs that can never finish each held a worker slot
+until the three-hour timeout. On a two-GPU run that is the entire sweep's
+capacity, and the neuronal noise rows stayed empty for hours with nothing
+apparently wrong.
+*Fix:* the same guard in `suite_noise`, plus a `--skip_variants` flag so the
+hand-maintained `ours` / `tune_ours` jobs need not be rerun either.
+
+**20. `experiments/coverage.py` mis-scored the tuning-protocol table**
+Coverage counts a row as filled when any cell past the second matches
+`\d\.\d`. In table R2.6b the result column is an integer count sitting beside
+prose columns whose grid text contains decimals, so rows with no result were
+counted as filled and rows with one were not. The table read 1/5 while it was
+in fact complete.
+*Fix:* an explicit rule for that table — column 3 must be a positive integer.
+
 ## Infrastructure added
 
 - `experiments/paper_sweep.py` — the six suites, resumable: each finished run is

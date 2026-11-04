@@ -30,6 +30,15 @@ def bounds(lines, tag):
     return s, e
 
 
+# R2.6b is the one table whose result column is an integer count sitting next
+# to prose columns that contain decimals of their own (the grid text). Scanning
+# it for "\d.\d" like the others both passes rows that are empty and fails rows
+# that are filled, so it gets an explicit rule: column 3 is a positive integer.
+SPECIAL = {"R2.6b": lambda cells: (len(cells) > 3
+                                   and cells[3].strip().isdigit()
+                                   and int(cells[3]) > 0)}
+
+
 def main():
     doc = Path(sys.argv[1] if len(sys.argv) > 1 else "REBUTTAL_RESPONSE.md")
     lines = doc.read_text().splitlines()
@@ -42,9 +51,13 @@ def main():
         rows = [l for l in lines[s:e]
                 if l.startswith("|") and not re.match(r"^\|[\s\-:|]+\|$", l)]
         rows = rows[1:]                      # drop the header row
-        filled = sum(1 for l in rows
-                     if any(re.search(r"\d\.\d", c)
-                            for c in l.strip().strip("|").split("|")[2:]))
+        check = SPECIAL.get(tag)
+        filled = 0
+        for l in rows:
+            cells = l.strip().strip("|").split("|")
+            if check(cells) if check else any(re.search(r"\d\.\d", c)
+                                              for c in cells[2:]):
+                filled += 1
         total = len(rows)
         tf += filled; tt += total
         pct = filled / total if total else 0

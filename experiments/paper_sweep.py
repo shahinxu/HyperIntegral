@@ -165,7 +165,10 @@ def suite_noise(cfg):
                 jobs.append(ours(f"ours_{b}", sc, noise, seed, cfg))
                 jobs.append(hyperpinn(f"hyperpinn_{b}", sc, noise, seed, cfg))
                 jobs.append(kernel(f"kernel_{b}", sc, noise, seed, cfg))
-                jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
+                # same exclusion as suite_main: THIS never terminates at n=30,
+                # and queueing it here held a worker slot per job until timeout
+                if sc != "neuronal":
+                    jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
                 jobs.append(sindy(f"sindy_integral_stlsq_{b}", sc, noise, seed, cfg,
                                   "integral", "stlsq"))
     return jobs
@@ -364,6 +367,10 @@ def main():
     ap.add_argument("--fresh", action="store_true",
                     help="Ignore existing results and rerun every job.")
     ap.add_argument("--dry_run", action="store_true")
+    ap.add_argument("--skip_variants", nargs="*", default=[],
+                    help="Variants to leave out of this run, e.g. ours "
+                         "tune_ours. The proposed method's rows are maintained "
+                         "by hand, so rerunning them only costs GPU time.")
     a = ap.parse_args()
 
     cfg = dict(scenes=a.scenes, seeds=a.seeds, noises=a.noises, n_samples=a.n_samples,
@@ -371,6 +378,12 @@ def main():
                max_cand=a.max_cand, bl_epochs=a.bl_epochs, bl_lr=a.bl_lr,
                thr=a.thr, win=a.win, bl_epochs_neuronal=a.bl_epochs_neuronal)
     jobs = SUITES[a.suite](cfg)
+    if a.skip_variants:
+        skip = set(a.skip_variants)
+        before = len(jobs)
+        jobs = [j for j in jobs if j["meta"].get("variant") not in skip]
+        print(f"skipping {before - len(jobs)} job(s) of variant(s) "
+              f"{', '.join(sorted(skip))}")
     out = Path(a.out); logs = out / "logs"; logs.mkdir(parents=True, exist_ok=True)
     print(f"suite={a.suite}: {len(jobs)} jobs on GPUs {a.gpus}")
     if a.dry_run:

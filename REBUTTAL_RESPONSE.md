@@ -148,7 +148,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Ours (IntegralPINN) | learning rate x number of sampled intervals | lr {1e-4, 5e-4, 1e-3, 5e-3} x n_intervals {16, 32, 64, 128} | 16 | 11 | 12-20 |
 | HyperPINN | learning rate x epoch budget | lr {1e-4, 5e-4, 1e-3, 5e-3} x epochs {7000, 14000, 21000, 28000} | 16 | 11 | 12-20 |
 | Kernel-based | bandwidth $\sigma_k$ x regularization $\lambda$ | $\sigma_k$ {0.1, 1.0, 10, 100} x $\lambda$ {1e-4, 1e-3, 1e-2, 1e-1} | 16 | 11 | 12-20 |
-| THIS | sparsity penalty $\lambda_1$ x ADMM penalty $\rho$ | $\lambda_1$ {1e-4, 1e-3, 1e-2, 1e-1} x $\rho$ {1e-4, 1e-3, 1e-2, 1e-1} | 6 | 11 | 12-20 |
+| THIS | sparsity penalty $\lambda_1$ x ADMM penalty $\rho$ | $\lambda_1$ {1e-4, 1e-3, 1e-2, 1e-1} x $\rho$ {1e-4, 1e-3, 1e-2, 1e-1} | 12 | 11 | 12-20 |
 | Integral SINDy | STLSQ threshold x integral window | threshold {1e-4, 1e-3, 1e-2, 1e-1} x window {5, 20, 50, 100} | 16 | 11 | 12-20 |
 
 **Table R2.6c — Best configuration found per method, per scene**
@@ -162,7 +162,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Ecological (n=9) | Integral SINDy | threshold=0.0001, window=20 | 0.504 | 0.477 ± 0.056 |
 | Social (n=8) | Ours | lr=0.001, n_intervals=16 | 0.725 | 0.719 ± 0.015 |
 | Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.578 ± 0.076 |
-| Social (n=8) | Kernel-based | not tuned | - | - |
+| Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.0001 | 0.487 | 0.503 ± 0.069 |
 | Social (n=8) | THIS | not tuned | - | - |
 | Social (n=8) | Integral SINDy | threshold=0.0001, window=5 | 0.511 | 0.491 ± 0.013 |
 | Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.677 ± 0.012 |
