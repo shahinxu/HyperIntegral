@@ -157,6 +157,20 @@ defect as item 12 — the grid existed only in the record's `meta`.
 {750, 1500, 2250, 3000} on neuronal, and record the budget that actually ran.
 The Grid cell of table R2.6b states the scaled values.
 
+**22. Table R2.6c scored the default configuration, not the one it names**
+The table is titled "Best configuration found per method" and its last column
+is "Macro-AUC (held-out seeds)", but that column was read off the *main*
+suite, which runs each baseline's default hyperparameters. For Integral SINDy
+the table named `threshold=1e-4` beside a number measured at `threshold=1e-2`;
+the kernel baseline's main runs use its own internal sigma/gamma search rather
+than the selected grid point, and THIS's use the Julia defaults
+(lambda=0.05, rho=0.001) rather than the selected pair. The column therefore
+reported untuned performance under a tuned configuration's label.
+*Fix:* a new `holdout` suite reruns each baseline's selected configuration on
+the held-out seeds (12-20), and `fill_tables.py` reads that column from those
+runs, falling back to the main suite only while they do not exist. The
+proposed method is excluded, as its rows are maintained by hand.
+
 ## Infrastructure added
 
 - `experiments/paper_sweep.py` — the six suites, resumable: each finished run is

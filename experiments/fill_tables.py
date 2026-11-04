@@ -23,6 +23,12 @@ SELECTION_SEED = 11
 MAIN_OF_TUNE = {"tune_ours": "ours", "tune_hyperpinn": "hyperpinn",
                 "tune_kernel": "kernel", "tune_this": "this",
                 "tune_sindy": "sindy_integral_stlsq"}
+# The held-out column of R2.6c must score the configuration the table names.
+# The main suite runs the defaults, so prefer the holdout suite, which reruns
+# the selected configuration on the held-out seeds, and fall back to the main
+# suite only while those runs do not exist yet.
+BEST_OF_TUNE = {"tune_hyperpinn": "best_hyperpinn", "tune_kernel": "best_kernel",
+                "tune_this": "best_this", "tune_sindy": "best_sindy"}
 
 OURS_VARIANTS = {
     "ours", "full", "derivative_loss", "no_staged", "no_bounded", "no_clip",
@@ -367,10 +373,9 @@ def fill_tuning(lines, stages, data):
                 return (cells[:2] + ["-", "-", "-"])[:len(cells)]
             best_cfg, best = max(rs, key=lambda x: x[1])
             # held-out performance of the default configuration, where available
-            main_variant = {"tune_ours": "ours", "tune_hyperpinn": "hyperpinn",
-                            "tune_kernel": "kernel", "tune_this": "this",
-                            "tune_sindy": "sindy_integral_stlsq"}.get(mv)
-            held = data.get((sc, main_variant), {}).get("macro", {})
+            held = data.get((sc, BEST_OF_TUNE.get(mv)), {}).get("macro", {})
+            if not held:
+                held = data.get((sc, MAIN_OF_TUNE.get(mv)), {}).get("macro", {})
             # seed 11 selects the configuration, so it is not held out
             held = {k: v for k, v in held.items() if k != SELECTION_SEED}
             return (cells[:2] + [best_cfg, f"{best:.3f}", cell(held)])[:len(cells)]

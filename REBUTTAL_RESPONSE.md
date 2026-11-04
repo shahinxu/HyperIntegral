@@ -138,7 +138,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Social (n=8) | THIS | 0.483 ± 0.106 | 0.429 ± 0.113 | 0.427 ± 0.074 | 0.363 ± 0.176 | 0.425 ± 0.075 | [0.372, 0.479] | 10 |
 | Neuronal (n=30) | Ours | 0.702 ± 0.011 | 0.697 ± 0.012 | 0.675 ± 0.014 | 0.634 ± 0.018 | 0.677 ± 0.012 | [0.668, 0.686] | 10 |
 | Neuronal (n=30) | HyperPINN | 0.486 ± 0.034 | 0.512 ± 0.050 | 0.509 ± 0.051 | 0.533 ± 0.116 | 0.510 ± 0.044 | [0.476, 0.544] | 9 |
-| Neuronal (n=30) | Kernel-based | 0.500 ± 0.000 | 0.518 ± 0.053 | 0.490 ± 0.074 | 0.522 ± 0.053 | 0.508 ± 0.032 | [0.485, 0.530] | 10 |
+| Neuronal (n=30) | Kernel-based | 0.500 ± 0.000 | 0.518 ± 0.053 | 0.490 ± 0.074 | 0.521 ± 0.053 | 0.507 ± 0.032 | [0.484, 0.530] | 10 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - | - |
 
 **Table R2.6b — Equal-budget hyperparameter tuning protocol**
@@ -195,7 +195,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Social (n=8) | Integral SINDy | 0.491 ± 0.012 | [0.482, 0.500] | -0.125 | 0.0001 | 0.0020 | 10 |
 | Neuronal (n=30) | Ours | 0.677 ± 0.012 | [0.668, 0.686] | — | — | — | 10 |
 | Neuronal (n=30) | HyperPINN | 0.510 ± 0.044 | [0.476, 0.544] | -0.008 | 0.6504 | 1.0000 | 9 |
-| Neuronal (n=30) | Kernel-based | 0.508 ± 0.032 | [0.485, 0.530] | -0.006 | 0.4639 | 0.6953 | 10 |
+| Neuronal (n=30) | Kernel-based | 0.507 ± 0.032 | [0.484, 0.530] | -0.006 | 0.4504 | 0.6953 | 10 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
 | Neuronal (n=30) | Integral SINDy | 0.510 ± 0.016 | [0.498, 0.521] | -0.004 | 0.6231 | 0.6250 | 10 |
 
@@ -215,7 +215,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Social (n=8) | Integral SINDy | 0.500 ± 0.045 | 0.503 ± 0.009 | 0.489 ± 0.012 | 0.503 ± 0.001 | 0.507 ± 0.007 | 0.503 ± 0.001 |
 | Neuronal (n=30) | Ours | 0.712 ± 0.011 | 0.702 ± 0.014 | 0.677 ± 0.012 | 0.632 ± 0.024 | 0.575 ± 0.032 | 0.522 ± 0.038 |
 | Neuronal (n=30) | HyperPINN | - | - | - | - | - | - |
-| Neuronal (n=30) | Kernel-based | - | - | - | - | - | - |
+| Neuronal (n=30) | Kernel-based | 0.488 | - | - | - | - | - |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
 | Neuronal (n=30) | Integral SINDy | 0.520 ± 0.012 | 0.521 ± 0.014 | 0.518 ± 0.017 | 0.518 ± 0.016 | 0.518 ± 0.009 | 0.502 ± 0.005 |
 

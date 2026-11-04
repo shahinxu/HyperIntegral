@@ -277,7 +277,92 @@ def suite_tuning(cfg):
     return jobs
 
 
-SUITES = {"main": suite_main, "ablation": suite_ablation,
+TUNING_DIRS = ["results/paper/tuning", "results/paper/tuning_neuronal"]
+
+
+def _best_configs(dirs=None):
+    """(scene, tuned-variant) -> the meta of its highest-scoring run."""
+    best = {}
+    for d in (dirs or TUNING_DIRS):
+        f = Path(d) / "results.jsonl"
+        if not f.exists():
+            continue
+        for line in f.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("macro_auc") is None:
+                continue
+            m = r.get("meta") or {}
+            v = m.get("variant", "")
+            if not v.startswith("tune_"):
+                continue
+            k = (m.get("scene"), v)
+            if k not in best or r["macro_auc"] > best[k][0]:
+                best[k] = (r["macro_auc"], m)
+    return {k: m for k, (_, m) in best.items()}
+
+
+def suite_holdout(cfg):
+    """Re-run each baseline's selected configuration on the held-out seeds.
+
+    Table R2.6c reports a best configuration per method and, beside it, a
+    macro-AUC over the held-out seeds. That second column used to be read off
+    the main suite, which runs the *default* hyperparameters - for Integral
+    SINDy the table named threshold=1e-4 while the number came from runs at
+    threshold=1e-2. This suite evaluates the configuration the table actually
+    names. The proposed method is excluded: its rows are maintained by hand.
+    """
+    best = _best_configs(cfg.get("tuning_dirs"))
+    jobs = []
+    for sc in cfg["scenes"]:
+        for noise in cfg["noises"]:
+            for seed in cfg["seeds"]:
+                b = f"{sc}_noise{noise}_seed{seed}"
+                m = best.get((sc, "tune_hyperpinn"))
+                if m:
+                    ep = int(m["epochs"])
+                    c2 = dict(cfg, bl_lr=m["lr"], bl_epochs=ep, bl_epochs_neuronal=ep)
+                    jobs.append(dict(
+                        hyperpinn(f"best_hyperpinn_{b}", sc, noise, seed, c2),
+                        meta={"method": "hyperpinn", "variant": "best_hyperpinn",
+                              "scene": sc, "noise": noise, "seed": seed,
+                              "n_nodes": SCENES[sc]["n"], "lr": m["lr"], "epochs": ep}))
+                m = best.get((sc, "tune_kernel"))
+                if m:
+                    j = kernel(f"best_kernel_{b}", sc, noise, seed, cfg)
+                    j["cli"] = j["cli"] + ["--sigma_k", str(m["sigma_k"]),
+                                           "--lam", str(m["lam"])]
+                    jobs.append(dict(j, meta={
+                        "method": "kernel", "variant": "best_kernel", "scene": sc,
+                        "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
+                        "sigma_k": m["sigma_k"], "lam": m["lam"]}))
+                m = best.get((sc, "tune_this"))
+                if m and sc != "neuronal":
+                    j = this_method(f"best_this_{b}", sc, noise, seed, cfg)
+                    j["cli"] = j["cli"] + ["--lambda1", str(m["lambda1"]),
+                                           "--rho", str(m["rho"])]
+                    jobs.append(dict(j, meta={
+                        "method": "this", "variant": "best_this", "scene": sc,
+                        "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
+                        "lambda1": m["lambda1"], "rho": m["rho"]}))
+                m = best.get((sc, "tune_sindy"))
+                if m:
+                    c2 = dict(cfg, thr=m["threshold"], win=m["window"])
+                    jobs.append(dict(
+                        sindy(f"best_sindy_{b}", sc, noise, seed, c2,
+                              "integral", "stlsq"),
+                        meta={"method": "sindy_integral_stlsq",
+                              "variant": "best_sindy", "scene": sc, "noise": noise,
+                              "seed": seed, "n_nodes": SCENES[sc]["n"],
+                              "threshold": m["threshold"], "window": m["window"]}))
+    return jobs
+
+
+SUITES = {"main": suite_main, "ablation": suite_ablation, "holdout": suite_holdout,
           "noise": suite_noise, "sigma_h": suite_sigma_h,
           "sparsity": suite_sparsity, "tuning": suite_tuning}
 
@@ -379,6 +464,9 @@ def main():
     ap.add_argument("--fresh", action="store_true",
                     help="Ignore existing results and rerun every job.")
     ap.add_argument("--dry_run", action="store_true")
+    ap.add_argument("--tuning_dirs", nargs="*", default=None,
+                    help="Where the holdout suite reads the selected "
+                         "configurations from (default: both tuning sweeps).")
     ap.add_argument("--skip_variants", nargs="*", default=[],
                     help="Variants to leave out of this run, e.g. ours "
                          "tune_ours. The proposed method's rows are maintained "
@@ -388,7 +476,8 @@ def main():
     cfg = dict(scenes=a.scenes, seeds=a.seeds, noises=a.noises, n_samples=a.n_samples,
                n_epochs=a.n_epochs, lr=a.lr, stage1=a.stage1, ramp=a.ramp,
                max_cand=a.max_cand, bl_epochs=a.bl_epochs, bl_lr=a.bl_lr,
-               thr=a.thr, win=a.win, bl_epochs_neuronal=a.bl_epochs_neuronal)
+               thr=a.thr, win=a.win, bl_epochs_neuronal=a.bl_epochs_neuronal,
+               tuning_dirs=a.tuning_dirs)
     jobs = SUITES[a.suite](cfg)
     if a.skip_variants:
         skip = set(a.skip_variants)
@@ -407,8 +496,9 @@ def main():
     # down every 15-20 minutes, so a long job (HyperPINN needs ~40 min) never
     # finishes; ordering by cost means each window still produces results.
     _COST = {"sindy_integral_lstsq": 1, "sindy_derivative_stlsq": 2,
-             "sindy_integral_stlsq": 3, "this": 4, "kernel": 5,
-             "ours": 6, "hyperpinn": 9}
+             "sindy_integral_stlsq": 3, "best_sindy": 3, "this": 4,
+             "best_this": 4, "kernel": 5, "best_kernel": 5,
+             "ours": 6, "hyperpinn": 9, "best_hyperpinn": 9}
     jobs.sort(key=lambda j: _COST.get(j["meta"].get("variant", ""), 7))
 
     done = load_done(out) if not a.fresh else set()
