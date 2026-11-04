@@ -185,6 +185,26 @@ groups by noise. The three numbers disagreeing with each other is what made
 the defect visible.
 *Fix:* `load(..., noise=MAIN_NOISE)` keeps only runs at the main noise level.
 
+**24. Concurrent jobs exhausted the sandbox's pid limit — `experiments/paper_sweep.py`**
+Workers inherited a 256-core machine with no thread-pool limits, so OpenMP and
+the BLAS libraries each sized their pools to the core count: a single job was
+measured at 127 threads. The sandbox cgroup allows 8192 pids in total, and
+nineteen concurrent jobs put the machine at 7993 - 97.5% of the limit. Jobs
+then died about 70 seconds in, before their first epoch, with
+
+    libgomp: Thread creation failed: Resource temporarily unavailable
+
+and the sweep recorded them as ordinary failures, so the neuronal noise rows
+kept not filling with nothing in the log to explain it.
+
+The oversubscription was also the reason every surviving job was slow: a
+750-epoch HyperPINN run took 3635 s where the main suite's 3000-epoch runs
+took 2121 s, a 7x per-epoch slowdown.
+*Fix:* `env_for()` pins `OMP_NUM_THREADS` and the MKL / OpenBLAS / NumExpr /
+veclib / Julia equivalents to `SWEEP_THREADS_PER_JOB` (4 by default).
+Measured after the change: 7 threads per job instead of 127, 3377 total
+instead of 7993, at the same 19-way concurrency.
+
 ## Open finding, not fixed: the Ours means in R2.5a and R3.7c are not in the records
 
 Checked cell by cell against every recorded run at the main noise level:

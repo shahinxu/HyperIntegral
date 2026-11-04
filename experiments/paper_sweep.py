@@ -29,10 +29,24 @@ def cap_for(scene):
     return SCENES[scene].get("cap", 0)
 
 
+# Each worker inherits a machine with 256 cores, so OpenMP and the BLAS
+# libraries each start a thread per core: one job was measured at 127 threads.
+# The sandbox cgroup allows 8192 pids in total, so a dozen concurrent jobs
+# exhaust it and the next one dies with
+#   libgomp: Thread creation failed: Resource temporarily unavailable
+# before it reaches its first epoch. Capping the pools also removes the
+# oversubscription that made every surviving job several times slower.
+THREADS_PER_JOB = int(os.environ.get("SWEEP_THREADS_PER_JOB", "4"))
+
+
 def env_for(scene):
     e = dict(os.environ)
     e.update(SCENES[scene]["env"])
     e["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                "JULIA_NUM_THREADS"):
+        e[var] = str(THREADS_PER_JOB)
     e["PATH"] = str(Path.home() / ".local/julia-1.10.5/bin") + os.pathsep + e.get("PATH", "")
     return e
 
