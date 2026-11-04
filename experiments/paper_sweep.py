@@ -219,14 +219,26 @@ def suite_tuning(cfg):
                              meta={"variant": "tune_ours", "lr": lr, "n_intervals": ni})
                     # the ours() helper already injected cfg lr; keep the override last
                     jobs.append(j)
+            _EP_GRID = [7000, 14000, 21000, 28000]
             for lr in [1e-4, 5e-4, 1e-3, 5e-3]:
-                for ep in [7000, 14000, 21000, 28000]:
-                    c2 = dict(cfg, bl_epochs=ep, bl_lr=lr)
+                for ep in _EP_GRID:
+                    # hyperpinn() clamps the neuronal budget to
+                    # bl_epochs_neuronal because the full budget cannot finish
+                    # inside the per-job timeout at n=30. Clamping collapsed
+                    # the whole epoch axis of this grid to one value, so all 16
+                    # configurations ran identically and only the 4 learning
+                    # rates actually differed. Scale the grid into the feasible
+                    # budget instead, keeping four distinct points.
+                    ep_eff = ep
+                    if sc == "neuronal":
+                        ep_eff = max(1, ep * cfg["bl_epochs_neuronal"] // _EP_GRID[-1])
+                    c2 = dict(cfg, bl_epochs=ep_eff, bl_epochs_neuronal=ep_eff, bl_lr=lr)
                     jobs.append(dict(hyperpinn(f"tune_hyperpinn_lr{lr}_ep{ep}_{sc}",
                                                sc, noise, seed, c2),
                                      meta={"method": "hyperpinn", "variant": "tune_hyperpinn",
                                            "scene": sc, "noise": noise, "seed": seed,
-                                           "n_nodes": SCENES[sc]["n"], "lr": lr, "epochs": ep}))
+                                           "n_nodes": SCENES[sc]["n"], "lr": lr,
+                                           "epochs": ep_eff}))
             # Kernel and THIS were previously left untuned while every other
             # method got a 16-point grid, which is exactly the imbalance the
             # reviewer asks about. Give them grids of the same size.

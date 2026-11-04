@@ -146,6 +146,17 @@ counted as filled and rows with one were not. The table read 1/5 while it was
 in fact complete.
 *Fix:* an explicit rule for that table — column 3 must be a positive integer.
 
+**21. The HyperPINN epoch grid collapsed to a single point on neuronal — `experiments/paper_sweep.py`**
+`hyperpinn()` clamps the neuronal budget with `min(epochs, bl_epochs_neuronal)`
+because the full budget cannot finish inside the per-job timeout at n=30. In
+`suite_tuning` that clamp flattened the entire epoch axis: all four budgets
+became 3000, so the 16-point grid was really 4 learning rates run four times
+each, at roughly nine GPU-hours for four distinct measurements. Same class of
+defect as item 12 — the grid existed only in the record's `meta`.
+*Fix:* scale the grid into the feasible budget instead of clamping it, giving
+{750, 1500, 2250, 3000} on neuronal, and record the budget that actually ran.
+The Grid cell of table R2.6b states the scaled values.
+
 ## Infrastructure added
 
 - `experiments/paper_sweep.py` — the six suites, resumable: each finished run is

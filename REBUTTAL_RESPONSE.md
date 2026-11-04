@@ -146,7 +146,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Method | Tuned hyperparameters | Grid | Configurations | Selection seed | Evaluation seeds |
 |---|---|---|---|---|---|
 | Ours (IntegralPINN) | learning rate x number of sampled intervals | lr {1e-4, 5e-4, 1e-3, 5e-3} x n_intervals {16, 32, 64, 128} | 16 | 11 | 12-20 |
-| HyperPINN | learning rate x epoch budget | lr {1e-4, 5e-4, 1e-3, 5e-3} x epochs {7000, 14000, 21000, 28000} | 16 | 11 | 12-20 |
+| HyperPINN | learning rate x epoch budget | lr {1e-4, 5e-4, 1e-3, 5e-3} x epochs {7000, 14000, 21000, 28000}; on neuronal scaled to {750, 1500, 2250, 3000}, the full budget cannot finish at n=30 | 16 | 11 | 12-20 |
 | Kernel-based | bandwidth $\sigma_k$ x regularization $\lambda$ | $\sigma_k$ {0.1, 1.0, 10, 100} x $\lambda$ {1e-4, 1e-3, 1e-2, 1e-1} | 16 | 11 | 12-20 |
 | THIS | sparsity penalty $\lambda_1$ x ADMM penalty $\rho$ | $\lambda_1$ {1e-4, 1e-3, 1e-2, 1e-1} x $\rho$ {1e-4, 1e-3, 1e-2, 1e-1} | 16 | 11 | 12-20 |
 | Integral SINDy | STLSQ threshold x integral window | threshold {1e-4, 1e-3, 1e-2, 1e-1} x window {5, 20, 50, 100} | 16 | 11 | 12-20 |
