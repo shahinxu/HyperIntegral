@@ -93,9 +93,7 @@ def kernel(tag, scene, noise, seed, cfg):
 
 
 def this_method(tag, scene, noise, seed, cfg):
-    """THIS is a Julia implementation driven through models/this/run.py.
-    It serializes on a per-scene export directory, so it is run with
-    jobs_per_gpu = 1 for its scene."""
+    """THIS is a Julia implementation driven through models/this/run.py."""
     return dict(name=tag, module="models.this.run", scene=scene,
                 cli=["--scene", scene, "--n_samples", str(cfg["n_samples"]),
                      "--noise", str(noise), "--seed", str(seed), "--python", PY,
@@ -129,7 +127,11 @@ def suite_main(cfg):
                 jobs.append(ours(f"ours_{b}", sc, noise, seed, cfg))
                 jobs.append(hyperpinn(f"hyperpinn_{b}", sc, noise, seed, cfg))
                 jobs.append(kernel(f"kernel_{b}", sc, noise, seed, cfg))
-                jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
+                # THIS hangs indefinitely on the neuronal scene (n=30): the run
+                # produces no output at all and never terminates, so it is
+                # excluded there rather than blocking every later stage.
+                if sc != "neuronal":
+                    jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
                 for form, est in (("integral", "stlsq"), ("derivative", "stlsq"),
                                   ("integral", "lstsq")):
                     jobs.append(sindy(f"sindy_{form}_{est}_{b}", sc, noise, seed, cfg, form, est))
@@ -222,6 +224,31 @@ def suite_tuning(cfg):
                                      meta={"method": "hyperpinn", "variant": "tune_hyperpinn",
                                            "scene": sc, "noise": noise, "seed": seed,
                                            "n_nodes": SCENES[sc]["n"], "lr": lr, "epochs": ep}))
+            # Kernel and THIS were previously left untuned while every other
+            # method got a 16-point grid, which is exactly the imbalance the
+            # reviewer asks about. Give them grids of the same size.
+            for sg in [0.1, 1.0, 10.0, 100.0]:
+                for lam in [1e-4, 1e-3, 1e-2, 1e-1]:
+                    j = kernel(f"tune_kernel_sg{sg}_lam{lam}_{sc}", sc, noise, seed, cfg)
+                    # the grid point has to reach the model, not just the
+                    # record: without these flags all 16 runs were identical
+                    j["cli"] = j["cli"] + ["--sigma_k", str(sg), "--lam", str(lam)]
+                    jobs.append(dict(
+                        j,
+                        meta={"method": "kernel", "variant": "tune_kernel", "scene": sc,
+                              "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
+                              "sigma_k": sg, "lam": lam}))
+            if sc != "neuronal":          # THIS does not terminate at n=30
+                for l1 in [1e-4, 1e-3, 1e-2, 1e-1]:
+                    for rho in [1e-4, 1e-3, 1e-2, 1e-1]:
+                        j = this_method(f"tune_this_l1{l1}_rho{rho}_{sc}",
+                                        sc, noise, seed, cfg)
+                        j["cli"] = j["cli"] + ["--lambda1", str(l1), "--rho", str(rho)]
+                        jobs.append(dict(
+                            j,
+                            meta={"method": "this", "variant": "tune_this", "scene": sc,
+                                  "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
+                                  "lambda1": l1, "rho": rho}))
             for thr in [1e-4, 1e-3, 1e-2, 1e-1]:
                 for win in [5, 20, 50, 100]:
                     c2 = dict(cfg, thr=thr, win=win)
@@ -263,6 +290,12 @@ def record(out_root, rec):
         rec["summary"] = s
         rec["macro_auc"] = s.get("extra_metrics", {}).get("macro_auc")
         rec["auc"] = s.get("auc")
+        if rec["macro_auc"] is None:
+            # baselines that do not report a macro themselves: average the
+            # per-order AUCs here, the same way repair_results does, so the
+            # run counts as done and does not get rerun on every resume
+            a = [v for v in (rec["auc"] or {}).values() if v is not None]
+            rec["macro_auc"] = sum(a) / len(a) if a else None
     else:
         rec["summary"] = None
     with _WRITE_LOCK:
@@ -345,6 +378,14 @@ def main():
             print("  ", " ".join([PY, "-m", j["module"]] + j["cli"]))
         return
 
+    # SHORT_FIRST: run cheap jobs before expensive ones. The sandbox is torn
+    # down every 15-20 minutes, so a long job (HyperPINN needs ~40 min) never
+    # finishes; ordering by cost means each window still produces results.
+    _COST = {"sindy_integral_lstsq": 1, "sindy_derivative_stlsq": 2,
+             "sindy_integral_stlsq": 3, "this": 4, "kernel": 5,
+             "ours": 6, "hyperpinn": 9}
+    jobs.sort(key=lambda j: _COST.get(j["meta"].get("variant", ""), 7))
+
     done = load_done(out) if not a.fresh else set()
     if done:
         before = len(jobs)
@@ -352,10 +393,9 @@ def main():
         print(f"resuming: {before - len(jobs)} job(s) already complete, {len(jobs)} to run")
 
     slots = [g for g in a.gpus for _ in range(a.jobs_per_gpu)]
-    # THIS shells out to Julia through a per-scene export directory shared by
-    # all of its runs, so those jobs cannot overlap; run them last, serially.
-    this_jobs = [j for j in jobs if j["module"] == "models.this.run"]
-    jobs = [j for j in jobs if j["module"] != "models.this.run"]
+    # THIS now writes into a per-run export directory, so its jobs can run
+    # concurrently with everything else instead of being serialized.
+    this_jobs = []
     recs = []
     with ThreadPoolExecutor(max_workers=len(slots)) as pool:
         futs = {pool.submit(run_job, j, slots[i % len(slots)], out, logs, a.timeout): j

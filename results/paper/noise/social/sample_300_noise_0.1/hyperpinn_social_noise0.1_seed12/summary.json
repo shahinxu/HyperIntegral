@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T08:54:07",
+  "method": "baseline_hyperpinn",
+  "scene": "social_contagion",
+  "config": {
+    "scene": "social",
+    "n_samples": 300,
+    "n_nodes": 8,
+    "max_order": 5,
+    "gpu_id": 6,
+    "noise": 0.1,
+    "seed": 12
+  },
+  "auc": {
+    "2-edges": 0.6354,
+    "3-edges": 0.724,
+    "4-edges": 0.6288,
+    "5-edges": 0.2315
+  },
+  "extra_metrics": {}
+}

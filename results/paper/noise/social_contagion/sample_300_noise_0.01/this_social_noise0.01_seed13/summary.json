@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T09:26:59",
+  "method": "this",
+  "scene": "social_contagion",
+  "config": {
+    "scene": "social",
+    "n_nodes": 8,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.01,
+    "bin_thresh": 0.0001
+  },
+  "auc": {
+    "2-edges": 0.6042,
+    "3-edges": 0.5234,
+    "4-edges": 0.3371,
+    "5-edges": 0.5463
+  },
+  "extra_metrics": {
+    "relerr_train": 1.0521361964217326,
+    "relerr_test": 0.901207048346972,
+    "auc_train_order2": 0.6042,
+    "auc_train_order3": 0.5234,
+    "auc_train_order4": 0.3371,
+    "auc_train_order5": 0.5463,
+    "auc_test_order2": 0.474,
+    "auc_test_order3": 0.2917,
+    "auc_test_order4": 0.4886,
+    "auc_test_order5": 0.5,
+    "macro_auc": 0.50275
+  }
+}

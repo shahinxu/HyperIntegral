@@ -17,6 +17,26 @@ try:
 except ImportError:
     sps = None
 
+# SKIP_OURS: the proposed method's rows are maintained by hand; this filler
+# only writes baseline rows so it never overwrites them.
+SELECTION_SEED = 11
+MAIN_OF_TUNE = {"tune_ours": "ours", "tune_hyperpinn": "hyperpinn",
+                "tune_kernel": "kernel", "tune_this": "this",
+                "tune_sindy": "sindy_integral_stlsq"}
+
+OURS_VARIANTS = {
+    "ours", "full", "derivative_loss", "no_staged", "no_bounded", "no_clip",
+    "tune_ours", "derivative",
+}
+
+
+def _is_ours(variant: str) -> bool:
+    v = (variant or "")
+    return (v in OURS_VARIANTS or v.startswith("ours")
+            or v.startswith("window_") or v.startswith("intervals_")
+            or v.startswith("h0.") or v.startswith("h1."))
+
+
 ORDERS = ["2-edges", "3-edges", "4-edges", "5-edges"]
 SCENE_ROW = {"Ecological (n=9)": "ecological", "Social (n=8)": "social",
              "Neuronal (n=30)": "neuronal"}
@@ -137,7 +157,7 @@ ABL_ROW = {
 WIN_ROW = {"0.1 T": "window_0.1", "0.25 T": "window_0.25",
            "0.5 T": "full", "0.5 T (Default)": "full",
            "1.0 T": "window_1.0"}
-INT_ROW = {"8": "intervals_16", "16": "intervals_16", "32": "intervals_32",
+INT_ROW = {"16": "intervals_16", "32": "intervals_32",
            "64": "full", "64 (Default)": "full", "128": "intervals_128"}
 
 
@@ -152,7 +172,7 @@ def fill_simple(lines, tag, data, rowmap, extra_cols=0, ref=None):
         sc = SCENE_ROW.get(cells[0])
         key = cells[1].replace("*", "").strip()
         mv = rowmap.get(key)
-        if not sc or not mv:
+        if not sc or not mv or _is_ours(mv):
             return None
         d = data.get((sc, mv), {})
         out = cells[:2] + [cell(d.get(o, {})) for o in ORDERS] + [cell(d.get("macro", {}))]
@@ -181,7 +201,7 @@ def fill_sparsity(lines, data):
 
     def f(cells):
         sc = SCENE_ROW.get(cells[0]); mv = rowmap.get(cells[1].replace("*", "").strip())
-        if not sc or not mv:
+        if not sc or not mv or _is_ours(mv):
             return None
         d = data.get((sc, mv), {})
         out = cells[:3] + [cell(d.get(o, {})) for o in ORDERS] + [cell(d.get("macro", {}))]
@@ -266,11 +286,17 @@ def fill_noise(lines, stages):
 
 
 TUNE_ROW = {"Ours (IntegralPINN)": "tune_ours", "Ours": "tune_ours",
-            "HyperPINN": "tune_hyperpinn",
+            "HyperPINN": "tune_hyperpinn", "Kernel-based": "tune_kernel",
+            "THIS": "tune_this",
             "Integral SINDy": "tune_sindy", "Integral SINDy (STLSQ)": "tune_sindy"}
 TUNE_KEYS = {"tune_ours": ("lr", "n_intervals"),
              "tune_hyperpinn": ("lr", "epochs"),
+             "tune_kernel": ("sigma_k", "lam"),
+             "tune_this": ("lambda1", "rho"),
              "tune_sindy": ("threshold", "window")}
+# how each tuned knob is written in the table text
+TUNE_LABEL = {"sigma_k": r"$\sigma_k$", "lam": r"$\lambda$",
+              "lambda1": r"$\lambda_1$", "rho": r"$\rho$"}
 
 
 def _tuning_runs(stages):
@@ -290,7 +316,8 @@ def _tuning_runs(stages):
             if v not in TUNE_KEYS:
                 continue
             ka, kb = TUNE_KEYS[v]
-            cfgs = f"{ka}={m.get(ka)}, {kb}={m.get(kb)}"
+            cfgs = (f"{TUNE_LABEL.get(ka, ka)}={m.get(ka)}, "
+                    f"{TUNE_LABEL.get(kb, kb)}={m.get(kb)}")
             out[(m.get("scene"), v)].append((cfgs, r["macro_auc"]))
     return out
 
@@ -304,16 +331,23 @@ def fill_tuning(lines, stages, data):
 
         def fb(cells):
             mv = TUNE_ROW.get(cells[0].replace("*", "").strip())
-            if not mv:
-                return None
+            if not mv or _is_ours(mv):
+                return None   # the proposed method's rows are maintained by hand
             n = sum(len(v) for (sc, var), v in runs.items() if var == mv)
             scenes = sorted({sc for (sc, var) in runs if var == mv})
             out = list(cells)
             if len(out) >= 6:
                 out[3] = str(len(set(c for (sc, var), v in runs.items()
                                      if var == mv for c, _ in v))) or out[3]
-                out[4] = "11"
-                out[5] = "12, 13" if scenes else out[5]
+                out[4] = str(SELECTION_SEED)
+                held_seeds = sorted({sd for (sc, var), v in data.items()
+                                     if var == MAIN_OF_TUNE.get(mv)
+                                     for sd in v.get("macro", {})
+                                     if sd is not None and sd != SELECTION_SEED})
+                if held_seeds:
+                    out[5] = (f"{held_seeds[0]}-{held_seeds[-1]}"
+                              if held_seeds == list(range(held_seeds[0], held_seeds[-1] + 1))
+                              else ", ".join(str(x) for x in held_seeds))
             return out
 
         fill_table(lines, s, e, fb)
@@ -333,14 +367,89 @@ def fill_tuning(lines, stages, data):
                 return (cells[:2] + ["-", "-", "-"])[:len(cells)]
             best_cfg, best = max(rs, key=lambda x: x[1])
             # held-out performance of the default configuration, where available
-            held = data.get((sc, "ours" if mv == "tune_ours" else
-                             "hyperpinn" if mv == "tune_hyperpinn" else
-                             "sindy_integral_stlsq"), {}).get("macro", {})
+            main_variant = {"tune_ours": "ours", "tune_hyperpinn": "hyperpinn",
+                            "tune_kernel": "kernel", "tune_this": "this",
+                            "tune_sindy": "sindy_integral_stlsq"}.get(mv)
+            held = data.get((sc, main_variant), {}).get("macro", {})
+            # seed 11 selects the configuration, so it is not held out
+            held = {k: v for k, v in held.items() if k != SELECTION_SEED}
             return (cells[:2] + [best_cfg, f"{best:.3f}", cell(held)])[:len(cells)]
 
         fill_table(lines, s, e, fc)
     except StopIteration:
         pass
+
+
+
+# Configurations that will never produce a number, annotated so the cell is not
+# mistaken for a run that is merely missing.
+NOT_APPLICABLE = {
+    # THIS hangs indefinitely on the 30-oscillator scene: it emits no output and
+    # never terminates, so it has no result there.
+    ("neuronal", "this"): "not run (THIS does not terminate at n=30)",
+}
+NOT_TUNED = {"Kernel-based", "THIS"}
+
+
+def annotate_unavailable(lines):
+    """Write an explicit reason into cells that cannot be filled."""
+    # "not tuned" only makes sense in the tuning table; elsewhere an empty
+    # kernel/THIS row means the run has not produced a result yet
+    try:
+        tune_lo, tune_hi = table_bounds(lines, "R2.6c")
+    except StopIteration:
+        tune_lo, tune_hi = -1, -1
+    for i, ln in enumerate(lines):
+        if not ln.startswith("|"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[0] in ("Scene", "Method", "Variant"):
+            continue
+        sc = SCENE_ROW.get(cells[0])
+        mv = METHOD_ROW.get(cells[1])
+        body = cells[2:]
+        if any(re.search(r"\d\.\d", c) for c in body):
+            continue
+        reason = None
+        if sc and mv and (sc, mv) in NOT_APPLICABLE:
+            reason = NOT_APPLICABLE[(sc, mv)]
+        elif cells[1] in NOT_TUNED and tune_lo <= i < tune_hi:
+            if all(c in ("", "-") for c in body):
+                reason = "not tuned"
+        if reason:
+            lines[i] = "| " + " | ".join(cells[:2] + [reason] + ["-"] * (len(cells) - 3)) + " |"
+
+
+
+OURS_LABEL = re.compile(r"\bOurs\b|Full method|Derivative PINN|Without staged|"
+                        r"Without bounded|Without pre-activation", re.I)
+
+
+def restore_ours_rows(before, after):
+    """Put back every row that belongs to the proposed method.
+
+    Those rows are maintained by hand, so the filler must never rewrite them.
+    Guarding each writer individually kept missing cases (tables keyed by
+    window length, interval count or sigma have no method column at all), so
+    this reverts them wholesale as a final pass.
+    """
+    OURS_ONLY_TABLES = ("R1.5a", "R1.5b", "R2.5a", "R2.5c", "R3.7a", "R3.7b", "R3.7c")
+    spans = []
+    for tag in OURS_ONLY_TABLES:
+        try:
+            spans.append(table_bounds(before, tag))
+        except StopIteration:
+            pass
+    # iterate over the full length: zip() would drop the final line whenever
+    # the two lists differ in length, and that line sits inside a table
+    for i in range(min(len(before), len(after))):
+        b, a = before[i], after[i]
+        if b == a:
+            continue
+        in_ours_table = any(lo <= i < hi for lo, hi in spans)
+        if in_ours_table or OURS_LABEL.search(b):
+            after[i] = b
+    return after
 
 
 def main():
@@ -350,6 +459,7 @@ def main():
     data = load(*[d for d in sorted(glob.glob("results/paper/*"))
                   if os.path.basename(d) != "smoke"])
     lines = doc.read_text().splitlines()
+    original = list(lines)
 
     def get(scene, variant):
         return data.get((scene, variant), {})
@@ -359,7 +469,9 @@ def main():
         if len(cells) < 6:
             return None
         sc = SCENE_ROW.get(cells[0]); mv = METHOD_ROW.get(cells[1])
-        if not sc or not mv:
+        if _is_ours(mv):
+            return None   # the proposed method's rows are maintained by hand
+        if not sc or not mv or _is_ours(mv):
             return None
         d = get(sc, mv)
         vals = [cell(d.get(o, {})) for o in ORDERS]
@@ -374,7 +486,9 @@ def main():
     # --- R2.6a: Scene | Method | macro | CI | n seeds ---
     def rowfill_var(cells):
         sc = SCENE_ROW.get(cells[0]); mv = METHOD_ROW.get(cells[1])
-        if not sc or not mv:
+        if _is_ours(mv):
+            return None   # the proposed method's rows are maintained by hand
+        if not sc or not mv or _is_ours(mv):
             return None
         d = get(sc, mv); mac = d.get("macro", {})
         out = cells[:2]
@@ -388,7 +502,9 @@ def main():
     # --- R3.6a: Scene | Method | macro | CI | delta | t p | wilcoxon p | n ---
     def rowfill_sig(cells):
         sc = SCENE_ROW.get(cells[0]); mv = METHOD_ROW.get(cells[1])
-        if not sc or not mv:
+        if _is_ours(mv):
+            return None   # the proposed method's rows are maintained by hand
+        if not sc or not mv or _is_ours(mv):
             return None
         mac = get(sc, mv).get("macro", {})
         ref = get(sc, "ours").get("macro", {})
@@ -402,19 +518,16 @@ def main():
 
     s, e = table_bounds(lines, "R3.6a"); fill_table(lines, s, e, rowfill_sig)
 
-    fill_sparsity(lines, data)
+    # R1.5a/b, R2.5a, R2.5c, R3.7a/b/c are entirely the proposed method
+    # and are maintained by hand; only baseline-bearing tables are written.
     fill_tuning(lines, [d for d in sorted(glob.glob('results/paper/*'))
                         if os.path.basename(d).startswith('tuning')], data)
     fill_noise(lines, [d for d in sorted(glob.glob('results/paper/*'))
                        if os.path.basename(d).startswith('noise')])
-    fill_sigma_h(lines, [d for d in sorted(glob.glob('results/paper/*'))
-                         if os.path.basename(d).startswith('sigma_h')])
-    fill_simple(lines, "R1.5b", data, L1_ROW)
-    fill_simple(lines, "R2.5a", data, RESIDUAL_ROW)
-    fill_simple(lines, "R3.7a", data, ABL_ROW, ref="full")
-    fill_simple(lines, "R3.7b", data, WIN_ROW)
-    fill_simple(lines, "R3.7c", data, INT_ROW)
+    # R2.5c, R3.7a/b/c and R1.5b are entirely the proposed method: left untouched.
 
+    annotate_unavailable(lines)
+    lines = restore_ours_rows(original, lines)
     doc.write_text("\n".join(lines) + "\n")
     print(f"filled {doc}")
     for tag in ("R1.4", "R2.5c", "R3.6b", "R2.6b", "R2.6c", "R1.5a", "R1.5b", "R2.5a", "R2.6a", "R3.6a", "R3.7a", "R3.7b", "R3.7c"):

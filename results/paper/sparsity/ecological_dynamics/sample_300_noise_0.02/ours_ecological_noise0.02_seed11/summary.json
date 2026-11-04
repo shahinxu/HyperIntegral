@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T00:49:35",
+  "method": "integral_pinn_nn[integral]",
+  "scene": "ecological_dynamics",
+  "config": {
+    "n_nodes": 9,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "n_epochs": 20000,
+    "lr": 0.001,
+    "seed": 11,
+    "loss_mode": "integral",
+    "bounded": true,
+    "no_clip": false,
+    "clip_c": 2.0,
+    "w_init": -1.5,
+    "stage1_epochs": 2500,
+    "physics_ramp_epochs": 2000,
+    "lambda_physics": 1.0,
+    "n_intervals": 64,
+    "n_quad": 5,
+    "window_frac": 0.5,
+    "max_candidates_per_order": 0
+  },
+  "auc": {
+    "2-edges": 0.4552469135802468,
+    "3-edges": 0.5989583333333334,
+    "4-edges": 0.36319444444444443,
+    "5-edges": 0.44579945799457993
+  },
+  "extra_metrics": {
+    "macro_auc": 0.46579978733815114,
+    "library_size": 372,
+    "n_nonzero": 43
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-04T19:47:22",
+  "method": "sindy[integral/stlsq]",
+  "scene": "neuronal_synchronization",
+  "config": {
+    "n_nodes": 30,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.1,
+    "seed": 11,
+    "form": "integral",
+    "estimator": "stlsq",
+    "threshold": 0.01,
+    "window": 20,
+    "ridge": 1e-08,
+    "max_candidates_per_order": 3000
+  },
+  "auc": {
+    "2-edges": 0.5507085346215781,
+    "3-edges": 0.4661139311900733,
+    "4-edges": 0.5028504359490276,
+    "5-edges": 0.5150451354062187
+  },
+  "extra_metrics": {
+    "macro_auc": 0.5086795092917245,
+    "macro_auc_signed_score": 0.5615294897582053,
+    "n_nonzero": 9435,
+    "library_size": 9435
+  }
+}

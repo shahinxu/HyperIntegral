@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-25T13:51:03",
+  "method": "sindy[derivative/stlsq]",
+  "scene": "social_contagion",
+  "config": {
+    "n_nodes": 8,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "seed": 11,
+    "form": "derivative",
+    "estimator": "stlsq",
+    "threshold": 0.01,
+    "window": 20,
+    "ridge": 1e-08,
+    "max_candidates_per_order": 0
+  },
+  "auc": {
+    "2-edges": 0.5885416666666667,
+    "3-edges": 0.5104166666666667,
+    "4-edges": 0.5227272727272727,
+    "5-edges": 0.5092592592592593
+  },
+  "extra_metrics": {
+    "macro_auc": 0.5327362163299664,
+    "macro_auc_signed_score": 0.569280039983165,
+    "n_nonzero": 210,
+    "library_size": 210
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-26T02:50:44",
+  "method": "sindy[integral/lstsq]",
+  "scene": "ecological_dynamics",
+  "config": {
+    "n_nodes": 9,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "seed": 16,
+    "form": "integral",
+    "estimator": "lstsq",
+    "threshold": 0.01,
+    "window": 20,
+    "ridge": 1e-08,
+    "max_candidates_per_order": 0
+  },
+  "auc": {
+    "2-edges": 0.35802469135802467,
+    "3-edges": 0.5324074074074073,
+    "4-edges": 0.525,
+    "5-edges": 0.5853658536585367
+  },
+  "extra_metrics": {
+    "macro_auc": 0.5001994881059921,
+    "macro_auc_signed_score": 0.6256723313760916,
+    "n_nonzero": 372,
+    "library_size": 372
+  }
+}

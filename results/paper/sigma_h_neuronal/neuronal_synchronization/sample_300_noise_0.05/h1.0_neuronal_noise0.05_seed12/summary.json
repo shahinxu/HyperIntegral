@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-28T02:10:27",
+  "method": "integral_pinn_nn[integral]",
+  "scene": "neuronal_synchronization",
+  "config": {
+    "n_nodes": 30,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.05,
+    "n_epochs": 8000,
+    "lr": 0.001,
+    "seed": 12,
+    "loss_mode": "integral",
+    "bounded": true,
+    "no_clip": false,
+    "clip_c": 2.0,
+    "w_init": -1.5,
+    "l1": 0.0,
+    "stage1_epochs": 1500,
+    "physics_ramp_epochs": 1000,
+    "lambda_physics": 1.0,
+    "n_intervals": 64,
+    "n_quad": 5,
+    "window_frac": 1.0,
+    "max_candidates_per_order": 3000
+  },
+  "auc": {
+    "2-edges": 0.5003220611916264,
+    "3-edges": 0.518206429780034,
+    "4-edges": 0.5777256129368806,
+    "5-edges": 0.4662506036628404
+  },
+  "extra_metrics": {
+    "macro_auc": 0.5156261768928453,
+    "library_size": 9435,
+    "n_nonzero": 6202
+  }
+}

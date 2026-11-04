@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T09:23:37",
+  "method": "this",
+  "scene": "ecological_dynamics",
+  "config": {
+    "scene": "ecological",
+    "n_nodes": 9,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.2,
+    "bin_thresh": 0.0001
+  },
+  "auc": {
+    "2-edges": 0.571,
+    "3-edges": 0.4988,
+    "4-edges": 0.7194,
+    "5-edges": 0.4851
+  },
+  "extra_metrics": {
+    "relerr": 0.33421564214475386,
+    "macro_auc": 0.5685749999999999
+  }
+}

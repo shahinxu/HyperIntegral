@@ -115,7 +115,9 @@ function main()
     ρ = parse(Float64, get(ENV, "ECO_RHO", "0.001"))
     niter = parse(Int, get(ENV, "ECO_NITER", "10"))
 
-    data_dir = joinpath(@__DIR__, "ecology-data")
+    # Each run gets its own export directory when the launcher supplies one,
+    # so THIS jobs can run in parallel instead of serializing on a shared dir.
+    data_dir = get(ENV, "ECO_DATA_DIR", joinpath(@__DIR__, "ecology-data"))
     mkpath(data_dir)
 
     py = get(ENV, "ECO_PY", "python")

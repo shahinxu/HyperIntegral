@@ -224,6 +224,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument("--max_candidates_per_order", type=int, default=0)
+    # Pin one point of the kernel grid instead of searching it internally, so
+    # an external sweep can give this baseline the same tuning budget as the
+    # others. Omitted, the internal search runs as before.
+    parser.add_argument("--sigma_k", type=float, default=None)
+    parser.add_argument("--lam", type=float, default=None)
     parser.add_argument("--results_root", type=str, default="results/kernel")
     args = parser.parse_args()
     import random as _random
@@ -248,8 +253,8 @@ def main():
 
     kernel_ridge = 1e-4
     theta_ridge = 1e-8
-    sigma_list = [0.2, 0.5, 1.0, 2.0]
-    gamma_list = [1e-6, 1e-5, 1e-4, 1e-3]
+    sigma_list = [args.sigma_k] if args.sigma_k is not None else [0.2, 0.5, 1.0, 2.0]
+    gamma_list = [args.lam] if args.lam is not None else [1e-6, 1e-5, 1e-4, 1e-3]
     # Was hardcoded to 3000, which silently shrank the neuronal candidate set
     # from 174406 to 9435 and made its AUC incomparable to the other methods.
     # 0 (the default) means use the complete candidate set.

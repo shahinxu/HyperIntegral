@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-04T19:48:05",
+  "method": "kernel_integral",
+  "scene": "ecological_dynamics",
+  "config": {
+    "n_nodes": 9,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "n_trajectories": 1,
+    "best_sigma": 0.1,
+    "best_gamma": 0.1
+  },
+  "auc": {
+    "2-edges": 0.5679012345679012,
+    "3-edges": 0.49189814814814814,
+    "4-edges": 0.6416666666666666,
+    "5-edges": 0.7642276422764227
+  },
+  "extra_metrics": {
+    "val_rmse": 0.008806782994249595,
+    "test_rmse": 0.0075309667385799845,
+    "test_fit_percent": -116.54618037070792
+  }
+}

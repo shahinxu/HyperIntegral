@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-28T03:30:05",
+  "method": "baseline_hyperpinn",
+  "scene": "neuronal_synchronization",
+  "config": {
+    "scene": "neuronal",
+    "n_samples": 300,
+    "n_nodes": 30,
+    "max_order": 5,
+    "gpu_id": 2,
+    "noise": 0.02,
+    "seed": 20
+  },
+  "auc": {
+    "2-edges": 0.5309,
+    "3-edges": 0.4903,
+    "4-edges": 0.5413,
+    "5-edges": 0.5706
+  },
+  "extra_metrics": {}
+}

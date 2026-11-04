@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T07:53:35",
+  "method": "baseline_hyperpinn",
+  "scene": "ecological_dynamics",
+  "config": {
+    "scene": "ecological",
+    "n_samples": 300,
+    "n_nodes": 9,
+    "max_order": 5,
+    "gpu_id": 0,
+    "noise": 0.1,
+    "seed": 11
+  },
+  "auc": {
+    "2-edges": 0.5648,
+    "3-edges": 0.4502,
+    "4-edges": 0.6708,
+    "5-edges": 0.7317
+  },
+  "extra_metrics": {}
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-10-27T07:39:25",
+  "method": "kernel_integral",
+  "scene": "social_contagion",
+  "config": {
+    "n_nodes": 8,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.0,
+    "n_trajectories": 1,
+    "best_sigma": 2.0,
+    "best_gamma": 1e-06
+  },
+  "auc": {
+    "2-edges": 0.5,
+    "3-edges": 0.37760416666666663,
+    "4-edges": 0.32954545454545453,
+    "5-edges": 0.14814814814814814
+  },
+  "extra_metrics": {
+    "val_rmse": 2.2986473053639735,
+    "test_rmse": 0.7679151095709482,
+    "test_fit_percent": -352.06975163680676
+  }
+}

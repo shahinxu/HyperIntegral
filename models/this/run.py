@@ -68,6 +68,10 @@ def main():
     parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument("--python", type=str, default=None)
     parser.add_argument("--bin_thresh", type=float, default=1e-4)
+    # THIS's two solver knobs, so an external sweep can tune this baseline on
+    # the same budget as the others. None keeps the Julia driver's default.
+    parser.add_argument("--lambda1", type=float, default=None)
+    parser.add_argument("--rho", type=float, default=None)
     args = parser.parse_args()
 
     env = os.environ.copy()
@@ -108,6 +112,15 @@ def main():
     env[f"{scene_prefix}_TEST_SEED"] = str(args.seed + 200)
     env["HG_DATA_SEED"] = str(args.seed)
     env[f"{scene_prefix}_MAX_CAND"] = str(args.max_candidates_per_order)
+    if args.lambda1 is not None:
+        env[f"{scene_prefix}_LAMBDA"] = str(args.lambda1)
+    if args.rho is not None:
+        env[f"{scene_prefix}_RHO"] = str(args.rho)
+    # Per-run export directory: the Julia drivers used a single shared folder,
+    # so concurrent THIS jobs overwrote each other and had to be serialized.
+    _dd = THIS_ROOT / f"{args.scene}-data-{args.run_tag or 'default'}"
+    _dd.mkdir(parents=True, exist_ok=True)
+    env[f"{scene_prefix}_DATA_DIR"] = str(_dd)
 
     cmd = ["julia", "--project=.", SCENE_TO_SCRIPT[args.scene]]
     proc = subprocess.run(cmd, cwd=str(THIS_ROOT), env=env, capture_output=True, text=True)
@@ -116,7 +129,7 @@ def main():
         print(proc.stderr, file=sys.stderr)
         raise SystemExit(proc.returncode)
 
-    metrics_path = THIS_ROOT / SCENE_TO_METRICS[args.scene]
+    metrics_path = _dd / SCENE_TO_METRICS[args.scene].name
     out_dir = Path(args.results_root) / SCENE_REGISTRY[args.scene].label / \
         f"sample_{args.n_samples}_noise_{args.noise}" / (args.run_tag or "default")
     out_dir.mkdir(parents=True, exist_ok=True)

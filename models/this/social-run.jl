@@ -122,7 +122,9 @@ function main()
     niter = parse(Int, get(ENV, "SC_NITER", "10"))
     bin_thresh = parse(Float64, get(ENV, "SC_BIN_THRESH", "1e-4"))
 
-    data_dir = joinpath(@__DIR__, "social-data")
+    # Each run gets its own export directory when the launcher supplies one,
+    # so THIS jobs can run in parallel instead of serializing on a shared dir.
+    data_dir = get(ENV, "SC_DATA_DIR", joinpath(@__DIR__, "social-data"))
     mkpath(data_dir)
 
     py = get(ENV, "SC_PY", "python")

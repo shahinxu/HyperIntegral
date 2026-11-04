@@ -147,21 +147,32 @@ def precompute_phi_f(HypergraphModel, x_data, t_data, orderwise_support, N, devi
     return x_gpu, t_gpu, Phi, F, n_hyperedges
 
 
-def build_integral_system(x_gpu, t_gpu, Phi, F, window):
-    """Rows: every window [i, i+window]. Returns (G [M,E], b [M])."""
+def build_integral_system(x_gpu, t_gpu, Phi, F, window, e_chunk=1024):
+    """Rows: every window [i, i+window]. Returns (G [M,E], b [M]).
+
+    The cumulative integral of Phi is taken a slice of candidates at a time:
+    Phi is [T, N, D, E] and at n=30 a single full-width temporary is hundreds
+    of megabytes, so the unchunked version ran the GPU out of memory.
+    """
     n_times = x_gpu.shape[0]
     dt = (t_gpu[1:] - t_gpu[:-1]).view(-1, 1, 1)
     cum_f = torch.cat([torch.zeros_like(F[:1]), torch.cumsum(F[:-1] * dt, dim=0)], dim=0)
     dt4 = dt.unsqueeze(-1)
-    cum_phi = torch.cat(
-        [torch.zeros_like(Phi[:1]), torch.cumsum(Phi[:-1] * dt4, dim=0)], dim=0
-    )
     i = torch.arange(0, n_times - window, device=x_gpu.device)
     j = i + window
     b = (x_gpu[j] - x_gpu[i]) - (cum_f[j] - cum_f[i])        # [W, N, D]
-    G = cum_phi[j] - cum_phi[i]                              # [W, N, D, E]
-    E = G.shape[-1]
-    return G.reshape(-1, E).cpu().numpy().astype(np.float64), b.reshape(-1).cpu().numpy().astype(np.float64)
+    E = Phi.shape[-1]
+    G = np.empty((b.numel(), E), dtype=np.float64)
+    for s in range(0, E, e_chunk):
+        e = min(s + e_chunk, E)
+        blk = Phi[..., s:e]
+        cum = torch.cat(
+            [torch.zeros_like(blk[:1]), torch.cumsum(blk[:-1] * dt4, dim=0)], dim=0
+        )
+        g = cum[j] - cum[i]                                  # [W, N, D, e-s]
+        G[:, s:e] = g.reshape(-1, e - s).cpu().numpy().astype(np.float64)
+        del cum, g
+    return G, b.reshape(-1).cpu().numpy().astype(np.float64)
 
 
 def build_derivative_system(x_gpu, t_gpu, Phi, F):

@@ -123,7 +123,9 @@ function main()
     niter = parse(Int, get(ENV, "NS_NITER", "10"))
     bin_thresh = parse(Float64, get(ENV, "NS_BIN_THRESH", "0.01"))
 
-    data_dir = joinpath(@__DIR__, "neuronal-data")
+    # Each run gets its own export directory when the launcher supplies one,
+    # so THIS jobs can run in parallel instead of serializing on a shared dir.
+    data_dir = get(ENV, "NS_DATA_DIR", joinpath(@__DIR__, "neuronal-data"))
     mkpath(data_dir)
 
     py = get(ENV, "NS_PY", "python")

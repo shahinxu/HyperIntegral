@@ -8,7 +8,7 @@ PY=$HOME/miniconda3/envs/scalepinn/bin/python
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PATH=$HOME/.local/julia-1.10.5/bin:$PATH
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
-JPG="${JPG:-2}"   # 8 GPUs x 2 = 16 concurrent slots
+JPG="${JPG:-4}"   # 8 GPUs x 2 = 16 concurrent slots
 SEEDS_MAIN="${SEEDS_MAIN:-11 12 13 14 15 16 17 18 19 20}"
 SEEDS_ABL="${SEEDS_ABL:-11 12 13}"
 EPOCHS="${EPOCHS:-8000}"
@@ -23,11 +23,23 @@ stage () {  # stage <name> <suite> <scenes...> -- <seeds...>
   while [ "$1" != "--" ]; do scenes+=("$1"); shift; done; shift
   seeds=("$@")
   echo "=== [$(date +%H:%M:%S)] stage $name ==="
+  # keep REBUTTAL_RESPONSE.md current while the stage runs, so the tables are
+  # up to date even if the process is killed mid-stage
+  ( while sleep 120; do
+      $PY -m experiments.repair_results results/paper >/dev/null 2>&1
+      $PY -m experiments.fill_tables REBUTTAL_RESPONSE.md >/dev/null 2>&1
+    done ) &
+  _refresher=$!
   $PY -m experiments.paper_sweep --suite "$suite" \
       --scenes "${scenes[@]}" --seeds "${seeds[@]}" --noises 0.02 \
       --n_epochs "$EPOCHS" --stage1 "$STAGE1" --ramp "$RAMP" \
       --gpus $GPUS --jobs_per_gpu "$JPG" --out "results/paper/$name" \
       2>&1 | tee -a "results/paper/${name}.log"
+  kill $_refresher 2>/dev/null
+  $PY -m experiments.repair_results results/paper >/dev/null 2>&1
+  $PY -m experiments.fill_tables REBUTTAL_RESPONSE.md >/dev/null 2>&1
+  echo "--- [$(date +%H:%M:%S)] $name done; tables refreshed ---"
+  $PY -m experiments.coverage REBUTTAL_RESPONSE.md | tail -1
 }
 
 # Fastest stages first: every container restart costs only the jobs in flight,
