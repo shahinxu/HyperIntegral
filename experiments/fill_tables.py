@@ -56,8 +56,17 @@ METHOD_ROW = {
 }
 
 
-def load(*stage_dirs):
-    """per-(scene, variant) -> {order/macro -> {seed: value}}"""
+MAIN_NOISE = 0.02
+
+
+def load(*stage_dirs, noise=MAIN_NOISE):
+    """per-(scene, variant) -> {order/macro -> {seed: value}}
+
+    Only runs at `noise` are loaded. The sweeps reuse seeds 11-13 at every
+    noise level, and this dict is keyed by seed alone, so without the filter a
+    sigma=0.2 run silently overwrote the sigma=0.02 run of the same seed and
+    the main tables reported a mixture of noise levels.
+    """
     data = defaultdict(lambda: defaultdict(dict))
     for d in stage_dirs:
         f = Path(d) / "results.jsonl"
@@ -70,6 +79,8 @@ def load(*stage_dirs):
             if r.get("macro_auc") is None:
                 continue
             m = r["meta"]
+            if noise is not None and m.get("noise") != noise:
+                continue
             key = (m.get("scene"), m.get("variant"))
             seed = m.get("seed")
             for o in ORDERS:

@@ -129,16 +129,16 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Scene | Method | 2-edges | 3-edges | 4-edges | 5-edges | Macro-AUC | 95% CI | n seeds |
 |---|---|---|---|---|---|---|---|---|
 | Ecological (n=9) | Ours | 0.828 ± 0.012 | 0.742 ± 0.015 | 0.712 ± 0.018 | 0.650 ± 0.019 | 0.733 ± 0.013 | [0.723, 0.743] | 10 |
-| Ecological (n=9) | HyperPINN | 0.619 ± 0.048 | 0.563 ± 0.079 | 0.603 ± 0.045 | 0.717 ± 0.173 | 0.625 ± 0.069 | [0.576, 0.675] | 10 |
-| Ecological (n=9) | Kernel-based | 0.438 ± 0.082 | 0.521 ± 0.068 | 0.548 ± 0.067 | 0.548 ± 0.146 | 0.514 ± 0.043 | [0.483, 0.545] | 10 |
-| Ecological (n=9) | THIS | 0.541 ± 0.108 | 0.497 ± 0.072 | 0.512 ± 0.130 | 0.611 ± 0.174 | 0.540 ± 0.060 | [0.498, 0.583] | 10 |
+| Ecological (n=9) | HyperPINN | 0.653 ± 0.036 | 0.611 ± 0.024 | 0.602 ± 0.037 | 0.776 ± 0.091 | 0.661 ± 0.022 | [0.645, 0.676] | 10 |
+| Ecological (n=9) | Kernel-based | 0.392 ± 0.065 | 0.526 ± 0.062 | 0.563 ± 0.084 | 0.586 ± 0.188 | 0.517 ± 0.041 | [0.488, 0.546] | 10 |
+| Ecological (n=9) | THIS | 0.539 ± 0.113 | 0.466 ± 0.052 | 0.506 ± 0.104 | 0.667 ± 0.089 | 0.545 ± 0.053 | [0.507, 0.583] | 10 |
 | Social (n=8) | Ours | 0.743 ± 0.015 | 0.692 ± 0.018 | 0.779 ± 0.014 | 0.662 ± 0.019 | 0.719 ± 0.015 | [0.709, 0.729] | 10 |
-| Social (n=8) | HyperPINN | 0.600 ± 0.094 | 0.679 ± 0.083 | 0.641 ± 0.076 | 0.419 ± 0.280 | 0.585 ± 0.074 | [0.532, 0.638] | 10 |
-| Social (n=8) | Kernel-based | 0.471 ± 0.111 | 0.503 ± 0.068 | 0.542 ± 0.108 | 0.475 ± 0.249 | 0.498 ± 0.067 | [0.450, 0.545] | 10 |
-| Social (n=8) | THIS | 0.483 ± 0.106 | 0.429 ± 0.113 | 0.427 ± 0.074 | 0.363 ± 0.176 | 0.425 ± 0.075 | [0.372, 0.479] | 10 |
+| Social (n=8) | HyperPINN | 0.598 ± 0.097 | 0.682 ± 0.089 | 0.644 ± 0.074 | 0.419 ± 0.280 | 0.586 ± 0.073 | [0.533, 0.638] | 10 |
+| Social (n=8) | Kernel-based | 0.459 ± 0.095 | 0.495 ± 0.063 | 0.553 ± 0.111 | 0.506 ± 0.220 | 0.503 ± 0.073 | [0.451, 0.556] | 10 |
+| Social (n=8) | THIS | 0.518 ± 0.072 | 0.419 ± 0.069 | 0.379 ± 0.104 | 0.429 ± 0.236 | 0.436 ± 0.076 | [0.382, 0.491] | 10 |
 | Neuronal (n=30) | Ours | 0.702 ± 0.011 | 0.697 ± 0.012 | 0.675 ± 0.014 | 0.634 ± 0.018 | 0.677 ± 0.012 | [0.668, 0.686] | 10 |
 | Neuronal (n=30) | HyperPINN | 0.486 ± 0.034 | 0.512 ± 0.050 | 0.509 ± 0.051 | 0.533 ± 0.116 | 0.510 ± 0.044 | [0.476, 0.544] | 9 |
-| Neuronal (n=30) | Kernel-based | 0.500 ± 0.000 | 0.518 ± 0.053 | 0.490 ± 0.074 | 0.521 ± 0.053 | 0.507 ± 0.032 | [0.484, 0.530] | 10 |
+| Neuronal (n=30) | Kernel-based | 0.500 ± 0.000 | 0.518 ± 0.053 | 0.490 ± 0.074 | 0.522 ± 0.053 | 0.508 ± 0.032 | [0.485, 0.530] | 10 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - | - |
 
 **Table R2.6b — Equal-budget hyperparameter tuning protocol**
@@ -146,7 +146,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Method | Tuned hyperparameters | Grid | Configurations | Selection seed | Evaluation seeds |
 |---|---|---|---|---|---|
 | Ours (IntegralPINN) | learning rate x number of sampled intervals | lr {1e-4, 5e-4, 1e-3, 5e-3} x n_intervals {16, 32, 64, 128} | 16 | 11 | 12-20 |
-| HyperPINN | learning rate x epoch budget | lr {1e-4, 5e-4, 1e-3, 5e-3} x epochs {7000, 14000, 21000, 28000}; on neuronal scaled to {750, 1500, 2250, 3000}, the full budget cannot finish at n=30 | 16 | 11 | 12-20 |
+| HyperPINN | learning rate x epoch budget | lr {1e-4, 5e-4, 1e-3, 5e-3} x epochs {7000, 14000, 21000, 28000}; on neuronal scaled to {750, 1500, 2250, 3000}, the full budget cannot finish at n=30 | 17 | 11 | 12-20 |
 | Kernel-based | bandwidth $\sigma_k$ x regularization $\lambda$ | $\sigma_k$ {0.1, 1.0, 10, 100} x $\lambda$ {1e-4, 1e-3, 1e-2, 1e-1} | 16 | 11 | 12-20 |
 | THIS | sparsity penalty $\lambda_1$ x ADMM penalty $\rho$ | $\lambda_1$ {1e-4, 1e-3, 1e-2, 1e-1} x $\rho$ {1e-4, 1e-3, 1e-2, 1e-1} | 16 | 11 | 12-20 |
 | Integral SINDy | STLSQ threshold x integral window | threshold {1e-4, 1e-3, 1e-2, 1e-1} x window {5, 20, 50, 100} | 16 | 11 | 12-20 |
@@ -156,17 +156,17 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Scene | Method | Best configuration | Macro-AUC (tuning seed) | Macro-AUC (held-out seeds) |
 |---|---|---|---|---|
 | Ecological (n=9) | Ours | lr=0.005, n_intervals=128 | 0.742 | 0.733 ± 0.013 |
-| Ecological (n=9) | HyperPINN | lr=0.0005, epochs=14000 | 0.678 | 0.629 ± 0.072 |
-| Ecological (n=9) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.719 | 0.515 ± 0.046 |
-| Ecological (n=9) | THIS | $\lambda_1$=0.0001, $\rho$=0.1 | 0.623 | 0.544 ± 0.062 |
+| Ecological (n=9) | HyperPINN | lr=0.0005, epochs=14000 | 0.678 | 0.659 ± 0.022 |
+| Ecological (n=9) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.719 | 0.511 ± 0.039 |
+| Ecological (n=9) | THIS | $\lambda_1$=0.0001, $\rho$=0.1 | 0.623 | 0.547 ± 0.055 |
 | Ecological (n=9) | Integral SINDy | threshold=0.0001, window=20 | 0.504 | 0.477 ± 0.056 |
 | Social (n=8) | Ours | lr=0.001, n_intervals=16 | 0.725 | 0.719 ± 0.015 |
-| Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.578 ± 0.076 |
-| Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.586 | 0.503 ± 0.069 |
-| Social (n=8) | THIS | $\lambda_1$=0.0001, $\rho$=0.0001 | 0.530 | 0.422 ± 0.079 |
+| Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.581 ± 0.076 |
+| Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.586 | 0.496 ± 0.074 |
+| Social (n=8) | THIS | $\lambda_1$=0.0001, $\rho$=0.0001 | 0.530 | 0.429 ± 0.077 |
 | Social (n=8) | Integral SINDy | threshold=0.0001, window=5 | 0.511 | 0.491 ± 0.013 |
 | Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.677 ± 0.012 |
-| Neuronal (n=30) | HyperPINN | - | - | - |
+| Neuronal (n=30) | HyperPINN | lr=0.0001, epochs=750 | 0.424 | 0.522 ± 0.029 |
 | Neuronal (n=30) | Kernel-based | not tuned | - | - |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - |
 | Neuronal (n=30) | Integral SINDy | - | - | - |
@@ -184,20 +184,20 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Scene | Method | Macro-AUC (mean ± std) | 95% CI | Δ vs Ours | paired t p | Wilcoxon p | n seeds |
 |---|---|---|---|---|---|---|---|
 | Ecological (n=9) | Ours | 0.733 ± 0.013 | [0.723, 0.743] | — | — | — | 10 |
-| Ecological (n=9) | HyperPINN | 0.625 ± 0.069 | [0.576, 0.675] | +0.131 | 0.0003 | 0.0020 | 10 |
-| Ecological (n=9) | Kernel-based | 0.514 ± 0.043 | [0.483, 0.545] | +0.023 | 0.5991 | 0.8203 | 10 |
-| Ecological (n=9) | THIS | 0.540 ± 0.060 | [0.498, 0.583] | +0.046 | 0.2398 | 0.2754 | 10 |
+| Ecological (n=9) | HyperPINN | 0.661 ± 0.022 | [0.645, 0.676] | +0.167 | 0.0001 | 0.0020 | 10 |
+| Ecological (n=9) | Kernel-based | 0.517 ± 0.041 | [0.488, 0.546] | +0.026 | 0.5409 | 0.5703 | 10 |
+| Ecological (n=9) | THIS | 0.545 ± 0.053 | [0.507, 0.583] | +0.051 | 0.2039 | 0.1934 | 10 |
 | Ecological (n=9) | Integral SINDy | 0.479 ± 0.054 | [0.441, 0.518] | -0.015 | 0.6991 | 0.6953 | 10 |
 | Social (n=8) | Ours | 0.719 ± 0.015 | [0.709, 0.729] | — | — | — | 10 |
-| Social (n=8) | HyperPINN | 0.585 ± 0.074 | [0.532, 0.638] | -0.031 | 0.3325 | 0.1934 | 10 |
-| Social (n=8) | Kernel-based | 0.498 ± 0.067 | [0.450, 0.545] | -0.119 | 0.0009 | 0.0059 | 10 |
-| Social (n=8) | THIS | 0.425 ± 0.075 | [0.372, 0.479] | -0.191 | 0.0000 | 0.0020 | 10 |
+| Social (n=8) | HyperPINN | 0.586 ± 0.073 | [0.533, 0.638] | -0.030 | 0.3499 | 0.2324 | 10 |
+| Social (n=8) | Kernel-based | 0.503 ± 0.073 | [0.451, 0.556] | -0.113 | 0.0008 | 0.0059 | 10 |
+| Social (n=8) | THIS | 0.436 ± 0.076 | [0.382, 0.491] | -0.180 | 0.0001 | 0.0020 | 10 |
 | Social (n=8) | Integral SINDy | 0.491 ± 0.012 | [0.482, 0.500] | -0.125 | 0.0001 | 0.0020 | 10 |
 | Neuronal (n=30) | Ours | 0.677 ± 0.012 | [0.668, 0.686] | — | — | — | 10 |
 | Neuronal (n=30) | HyperPINN | 0.510 ± 0.044 | [0.476, 0.544] | -0.008 | 0.6504 | 1.0000 | 9 |
-| Neuronal (n=30) | Kernel-based | 0.507 ± 0.032 | [0.484, 0.530] | -0.006 | 0.4504 | 0.6953 | 10 |
+| Neuronal (n=30) | Kernel-based | 0.508 ± 0.032 | [0.485, 0.530] | -0.006 | 0.4639 | 0.6953 | 10 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
-| Neuronal (n=30) | Integral SINDy | 0.510 ± 0.016 | [0.498, 0.521] | -0.004 | 0.6231 | 0.6250 | 10 |
+| Neuronal (n=30) | Integral SINDy | 0.510 ± 0.016 | [0.498, 0.521] | -0.004 | 0.6168 | 0.6250 | 10 |
 
 **Table R3.6b — Sensitivity to noise level (Macro-AUC, mean ± std)**
 
@@ -215,7 +215,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Social (n=8) | Integral SINDy | 0.500 ± 0.045 | 0.503 ± 0.009 | 0.489 ± 0.012 | 0.503 ± 0.001 | 0.507 ± 0.007 | 0.503 ± 0.001 |
 | Neuronal (n=30) | Ours | 0.712 ± 0.011 | 0.702 ± 0.014 | 0.677 ± 0.012 | 0.632 ± 0.024 | 0.575 ± 0.032 | 0.522 ± 0.038 |
 | Neuronal (n=30) | HyperPINN | - | - | - | - | - | - |
-| Neuronal (n=30) | Kernel-based | 0.488 | - | - | - | - | - |
+| Neuronal (n=30) | Kernel-based | 0.484 ± 0.023 | - | - | - | - | - |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
 | Neuronal (n=30) | Integral SINDy | 0.520 ± 0.012 | 0.521 ± 0.014 | 0.518 ± 0.017 | 0.518 ± 0.016 | 0.518 ± 0.009 | 0.502 ± 0.005 |
 

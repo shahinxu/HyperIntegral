@@ -171,6 +171,20 @@ the held-out seeds (12-20), and `fill_tables.py` reads that column from those
 runs, falling back to the main suite only while they do not exist. The
 proposed method is excluded, as its rows are maintained by hand.
 
+**23. The main tables mixed in runs from other noise levels — `experiments/fill_tables.py`**
+`load()` indexes每 (scene, variant) by seed alone and applied no noise filter.
+The sweeps reuse seeds 11-13 at all six noise levels, so a sigma=0.2 run
+silently overwrote the sigma=0.02 run of the same seed. 78 of 380
+(scene, variant, seed) combinations were affected, each spanning five noise
+levels. Every table filled through `load()` was wrong: R1.4, R1.5a, R2.6a,
+R3.6a, R3.7a and the held-out column of R2.6c.
+It showed up as inflated spread. Ecological HyperPINN read 0.625 +- 0.069 in
+R2.6a while the main suite's ten seeds give 0.661 +- 0.022, and the same
+method read 0.653 +- 0.021 in R3.6b, which was right because `fill_noise`
+groups by noise. The three numbers disagreeing with each other is what made
+the defect visible.
+*Fix:* `load(..., noise=MAIN_NOISE)` keeps only runs at the main noise level.
+
 ## Infrastructure added
 
 - `experiments/paper_sweep.py` — the six suites, resumable: each finished run is
