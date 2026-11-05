@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-05T00:32:21",
+  "method": "kernel_integral",
+  "scene": "neuronal_synchronization",
+  "config": {
+    "n_nodes": 30,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "n_trajectories": 1,
+    "best_sigma": 10.0,
+    "best_gamma": 0.0001
+  },
+  "auc": {
+    "2-edges": 0.5,
+    "3-edges": 0.4527993983831547,
+    "4-edges": 0.5193568820329384,
+    "5-edges": 0.4420297930829526
+  },
+  "extra_metrics": {
+    "val_rmse": 18.682582672744807,
+    "test_rmse": 17.49930054741764,
+    "test_fit_percent": -1516.7020165894548
+  }
+}
