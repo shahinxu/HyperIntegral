@@ -1,29 +1,41 @@
-"""Compare the Ours rows of R2.5a and R3.7c against the recorded runs.
+"""Compare the Ours rows of the response tables against the recorded runs.
 
-Reports, per cell, whether the printed mean and standard deviation can be
-reproduced from results/paper. Read-only: it never edits the document.
+Read-only. It never edits the document: the Ours rows are maintained by hand
+and this work is under instruction not to change them. With `--side-by-side`
+it prints what each cell would hold if it were filled from the runs, so the
+choice can be made with both numbers in view.
 """
+import argparse
 import glob
 import json
 import os
 import re
 import statistics as st
-import sys
 from collections import defaultdict
 
 MAIN_NOISE = 0.02
 ORDERS = ("2-edges", "3-edges", "4-edges", "5-edges")
 SCENE = {"Ecological (n=9)": "ecological", "Social (n=8)": "social",
          "Neuronal (n=30)": "neuronal"}
-R375C_ROW = {"16": "intervals_16", "32": "intervals_32",
-             "64 (Default)": "full", "128": "intervals_128"}
-R25A_ROW = {"Integral (ours)": "full", "Derivative": "derivative_loss"}
+TABLES = {
+    "R2.5a": {"Integral (ours)": "full", "Derivative": "derivative_loss"},
+    "R3.7c": {"16": "intervals_16", "32": "intervals_32",
+              "64 (Default)": "full", "128": "intervals_128"},
+    "R3.7b": {"0.1 T": "window_0.1", "0.25 T": "window_0.25",
+              "0.5 T": "full", "1.0 T": "window_1.0"},
+    "R3.7a": {"Full method": "full",
+              "Derivative PINN (same architecture, cf. Table R2.5a)": "derivative_loss",
+              "Without staged λ scheduling": "no_staged",
+              "Without gradient clipping (sub-ablation)": "no_clip",
+              "Without bounded tensor parameterization": "no_bounded"},
+}
 
 
-def measured():
+def measured(stages=("ablation", "ablation_neuronal")):
+    """per-(scene, variant, order) -> {seed: value}, from the ablation suite."""
     d = defaultdict(dict)
     for f in glob.glob("results/paper/*/results.jsonl"):
-        if os.path.basename(os.path.dirname(f)) == "smoke":
+        if os.path.basename(os.path.dirname(f)) not in stages:
             continue
         for line in open(f):
             if not line.strip():
@@ -37,37 +49,63 @@ def measured():
             for k, v in (r.get("auc") or {}).items():
                 if v is not None:
                     d[(m.get("scene"), m.get("variant"), k)][m.get("seed")] = v
+            d[(m.get("scene"), m.get("variant"), "macro")][m.get("seed")] = r["macro_auc"]
     return d
 
 
-def audit(lines, tag, rowmap, data):
-    start = next(i for i, l in enumerate(lines) if l.startswith(f"**Table {tag}"))
+def fmt(vals):
+    if not vals:
+        return "-"
+    v = list(vals.values())
+    return f"{st.mean(v):.3f} ± {st.stdev(v):.3f}" if len(v) > 1 else f"{v[0]:.3f}"
+
+
+def audit(lines, tag, rowmap, data, side_by_side):
+    try:
+        start = next(i for i, l in enumerate(lines)
+                     if l.startswith(f"**Table {tag}"))
+    except StopIteration:
+        return
     print(f"\n{tag}")
-    for l in lines[start:start + 24]:
+    for l in lines[start:start + 30]:
         if not l.startswith("|"):
             continue
         c = [x.strip() for x in l.strip("|").split("|")]
         if c[0] not in SCENE or c[1] not in rowmap:
             continue
+        sc, var = SCENE[c[0]], rowmap[c[1]]
         mok = sok = tot = 0
+        printed, measured_cells = [], []
         for k, cellv in zip(ORDERS, c[2:6]):
             mm = re.match(r"([\d.]+) ± ([\d.]+)", cellv)
-            vals = list(data.get((SCENE[c[0]], rowmap[c[1]], k), {}).values())
+            vals = data.get((sc, var, k), {})
+            printed.append(cellv if mm else "-")
+            measured_cells.append(fmt(vals))
             if not mm or len(vals) < 2:
                 continue
             tot += 1
-            mok += abs(float(mm.group(1)) - round(st.mean(vals), 3)) < 1e-9
-            sok += abs(float(mm.group(2)) - round(st.stdev(vals), 3)) < 1e-9
-        if tot:
-            print(f"  {c[0] + ' / ' + c[1]:36s} mean {mok}/{tot}   sd {sok}/{tot}")
+            mok += abs(float(mm.group(1)) - round(st.mean(vals.values() and list(vals.values())), 3)) < 1e-9
+            sok += abs(float(mm.group(2)) - round(st.stdev(list(vals.values())), 3)) < 1e-9
+        if not tot:
+            continue
+        label = f"{c[0]} / {c[1]}"
+        print(f"  {label:52s} mean {mok}/{tot}   sd {sok}/{tot}")
+        if side_by_side:
+            print(f"    {'printed':10s} " + "  ".join(f"{x:>15s}" for x in printed))
+            print(f"    {'measured':10s} " + "  ".join(f"{x:>15s}" for x in measured_cells))
 
 
 def main():
-    doc = sys.argv[1] if len(sys.argv) > 1 else "REBUTTAL_RESPONSE.md"
-    lines = open(doc).read().splitlines()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("doc", nargs="?", default="REBUTTAL_RESPONSE.md")
+    ap.add_argument("--side-by-side", action="store_true",
+                    help="also print what each cell would hold if filled "
+                         "from the runs")
+    a = ap.parse_args()
+    lines = open(a.doc).read().splitlines()
     data = measured()
-    audit(lines, "R2.5a", R25A_ROW, data)
-    audit(lines, "R3.7c", R375C_ROW, data)
+    for tag, rowmap in TABLES.items():
+        audit(lines, tag, rowmap, data, a.side_by_side)
 
 
 if __name__ == "__main__":

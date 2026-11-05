@@ -277,19 +277,33 @@ code reproduces the stored run exactly.
 A neuronal run also completes at n=60 (m = C(65,5) = 8.26 million, θ is
 19.8 GB), which the original could not approach.
 
-## Open finding, not fixed: the Ours means in R2.5a and R3.7c are not in the records
+## Open finding, not fixed: the proposed method's means are not in the records
 
-Checked cell by cell against every recorded run at the main noise level:
+Checked cell by cell against the ablation suite at the main noise level. The
+scope is wider than it first appeared - it is every ablation table, not just
+two:
 
-| Table | means matching the records | standard deviations matching |
+| Table / rows | means match | sd match |
 |---|---|---|
-| R3.7c (all 48 cells) | 0/48 | 48/48 |
-| R2.5a, Derivative rows | 4/4 per row | 4/4 per row |
-| R2.5a, Integral (ours) rows | 0/4 per row | 4/4 per row |
+| R2.5a, `Integral (ours)` | 0/4 per row | 4/4 per row |
+| R2.5a, `Derivative` | **4/4 per row** | 4/4 per row |
+| R3.7a, `Full method`, `Without staged λ`, `Without bounded` | 0/4 per row | 4/4 per row |
+| R3.7a, `Without gradient clipping` | 0/4 per row | **0/4 per row** |
+| R3.7a, `Derivative PINN` | **4/4 per row** | 4/4 per row |
+| R3.7b, all 12 rows | 0/4 per row | 4/4 per row |
+| R3.7c, all 12 rows | 0/4 per row | 4/4 per row |
 
 The agreement on the standard deviations is exact to the last digit, so those
-came from the runs; the means paired with them did not. The Derivative rows,
-which are not Ours rows, match on both.
+came from the runs; the means paired with them did not. The rows that do match
+on both are exactly the derivative baselines - the arm the tables compare
+against. `Without gradient clipping` matches on neither.
+
+Side by side, ecological at sigma=0.02:
+
+    Integral (ours)  printed   0.828  0.742  0.712  0.650
+                     measured  0.469  0.609  0.333  0.376
+    Derivative       printed   0.653  0.535  0.633  0.865
+                     measured  0.653  0.535  0.633  0.865
 
 This changes the direction of the comparison the tables are making. Measured
 macro-AUC at sigma=0.02, three seeds:
@@ -305,7 +319,8 @@ which this work is under instruction not to touch, and the discrepancy is not
 a code defect: the pipeline reproduces the recorded runs correctly. Deciding
 what the tables should say is the author's call, not something to patch.
 
-Reproduce with `experiments/check_ours_rows.py`.
+Reproduce with `python -m experiments.check_ours_rows`, or
+`--side-by-side` to see both numbers for every cell. The script is read-only.
 
 ## Infrastructure added
 
