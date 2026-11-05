@@ -277,6 +277,48 @@ code reproduces the stored run exactly.
 A neuronal run also completes at n=60 (m = C(65,5) = 8.26 million, θ is
 19.8 GB), which the original could not approach.
 
+## THIS on the neuronal scene: three quadratic accumulations, not a hang
+
+THIS was recorded throughout this work as not terminating at n=30, and four
+cells were annotated `not run` on that basis. That was wrong. The Julia
+implementation grows a matrix with `vcat` inside a loop in three places, so
+each append recopies everything accumulated so far - O(rows²) instead of
+O(rows). At n=9 the dictionary has 2002 monomials and none of it shows; at
+n=30 it has C(35,5) = 324632 and the three costs compound. Julia block-buffers
+its output, so the log stayed empty and the run looked hung.
+
+**27. `mySINDy` inverted the dictionary's Gram matrix — `models/this/this.jl`**
+`Ξ = Y*θ'*inv(θ*θ' + ρ*Id(m))` forms an m×m matrix: 785 GB at n=30, and about
+3.4e16 flops to invert. The push-through identity
+`θ'*inv(θθ' + ρI_m) == inv(θ'θ + ρI_T)*θ'` gives the same matrix from a T×T
+solve, T being 300. Added as `ridge_solve`, which picks whichever side is
+smaller.
+
+**28. `get_θd` built the dictionary by repeated `vcat` — `models/this/this-tools.jl`**
+Each level appended n children one at a time, recopying the block each time.
+Rewritten to size each level from its children and write once. Verified
+element-for-element against the original at (n,dmax) = (4,3), (5,4), (6,5)
+and (9,5): `θ` and `d` compare `==`.
+
+**29. The adjacency reconstruction appended row blocks the same way — `models/this/this.jl`**
+`Ainf[o] = vcat(Ainf[o], ...)` inside the loop over nonzero monomials.
+Without hard thresholding `coeff` is dense, so at n=30 the loop runs over
+174436 squarefree monomials and `Ainf` grows past five million rows. Now the
+blocks are collected per order and concatenated once.
+
+Checked end to end against the version in git at HEAD, same inputs: `coeff`
+identical element-for-element, `relerr` difference 0.0, and every order of
+`Ainf` identical. The ecological and social numbers are unchanged.
+
+| | n=30 | n=60 |
+|---|---|---|
+| before | 7.4 h, unfinished | unfinished |
+| after | **29.2 s** | **8 m 52 s** |
+
+`suite_main`, `suite_noise` and `suite_tuning` no longer skip the scene, and
+the four cells that carried `not run` now carry measured values. Coverage is
+164/164.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 Checked cell by cell against the ablation suite at the main noise level. The

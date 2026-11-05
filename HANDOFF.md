@@ -170,9 +170,11 @@ The four cells that were long marked `not run (THIS does not terminate at
 n=30)` are now measured. THIS was never hanging: its Julia code had three
 quadratic accumulation patterns and formed an m×m Gram matrix that is 785 GB
 at n=30, and its output is block-buffered, so an empty log looked like a hang.
-With bugs 27-29 fixed a neuronal run finishes in **35 seconds**. The fixes are
-behaviour-preserving - the ecological scene reproduces its stored run to four
-decimals.
+With bugs 27-29 fixed a neuronal run finishes in **29 seconds** at n=30 and
+8 m 52 s at n=60. The fixes are behaviour-preserving: checked against the
+version in git at the previous HEAD on the same inputs, `coeff` is identical
+element for element, the `relerr` difference is 0.0, and every order of
+`Ainf` is identical.
 
 What each suite ended at:
 
