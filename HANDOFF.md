@@ -163,28 +163,38 @@ the manifests alone.
 
 ## 6. State at handoff
 
-Coverage 155/164 (95%). Complete: R1.4, R1.5a, R1.5b, R2.5a, R2.5b, R2.5c,
-R2.6b, R3.7a, R3.7b, R3.7c. The ceiling is 160/164 — see the four annotated
-THIS cells below.
+**Coverage 160/164 — every cell that can be measured is filled.** Every sweep
+ran to completion and no process is left running.
 
-Every sweep was stopped cleanly before the machine change; no process is left
-running. The ecological and social tuning sweep finished (160/160 runs), so
-R2.6b and the ecological/social half of R2.6c are measured and final.
+The four cells that remain are THIS on the neuronal scene, in R2.6a, R2.6c,
+R3.6a and R3.6b. They cannot be filled: THIS does not terminate at n=30. A
+probe ran 40 minutes with no output at all and every recorded attempt exited
+non-zero, so `suite_tuning` and `suite_noise` both skip it there and the cells
+carry `not run (THIS does not terminate at n=30)`. 160/164 is the ceiling.
 
-Still filling, blocked only on sweeps that were running:
+What each suite ended at:
 
-- **R2.6c** — HyperPINN, Kernel-based and Integral SINDy on neuronal. Needs
-  the `tuning` suite on `--scenes neuronal`; 19 of its 48 jobs are recorded.
-- **R3.6b** — neuronal HyperPINN and Kernel-based. Needs the `noise` suite on
-  `--scenes neuronal`; 28 of its 54 jobs are recorded.
+| Suite | Runs |
+|---|---|
+| `tuning` (ecological + social) | 160/160 |
+| `tuning_neuronal` | 61/64 |
+| `noise_neuronal` | complete |
+| `holdout` (all three scenes) | 99/99 |
 
-Both are slow for the same reason: at n=30 a single kernel or HyperPINN run
-takes 20-35 minutes, and the kernel baseline is CPU-bound (it was observed at
-450-600% CPU with the GPU idle), so `--jobs_per_gpu` does not govern its
-throughput. Budget a few hours of wall clock, not minutes.
+Re-deriving the document from the committed manifests is two commands and
+needs no GPU:
 
-Permanently empty, correctly annotated: the three THIS neuronal cells (R2.6a,
-R3.6a, R3.6b) and the R2.6c THIS neuronal row.
+    python -m experiments.repair_results
+    python -m experiments.fill_tables
+
+**Before adding runs, read bug 24 in `BUGFIX_LOG.md`.** The sandbox cgroup
+allows 8192 pids and an uncapped job opens 127 threads, so a dozen concurrent
+jobs exhaust it and every later job dies about 70 seconds in with
+`libgomp: Thread creation failed`, logged as an ordinary failure. `env_for()`
+now pins the thread pools; `SWEEP_THREADS_PER_JOB` overrides the default of 4.
+This was also the cause of most of the unexplained failures earlier in the
+project: a neuronal HyperPINN run that had died at 30 s with no error
+completed in 1879 s once the cap was in place.
 
 ### Four questions the owner asked, and the answers given
 
@@ -194,6 +204,9 @@ R3.6a, R3.6b) and the R2.6c THIS neuronal row.
 2. *Is "12-20" missing a seed; should it be 10?* It is 9 seeds and that is
    correct — seeds are 11-20, and seed 11 is the selection seed. The real
    defect was that the held-out column was averaging all ten (bug 15).
+   A later question about the CI of neuronal HyperPINN had the same root:
+   that row was n=9 because seed 13 had died, so its interval used t(8), not
+   t(9). The rerun succeeded and the row is n=10 again.
 3. *Did THIS produce neuronal results? The std dev does not match.* No. The
    number in R2.6c was fabricated and has been removed (bug 17).
 4. *In R2.5a, is integral always below derivative at k=5?* No. Measured
