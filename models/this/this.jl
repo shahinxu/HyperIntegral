@@ -176,6 +176,37 @@ end
 
 # ================================================================================
 """
+	ridge_solve(θ, Y, ρ)
+
+Tikhonov-regularized least squares, `Y*θ'*inv(θ*θ' + ρI_m)`.
+
+Formed directly this needs the m×m Gram matrix of the dictionary. The
+dictionary holds every monomial of degree at most `dmax`, so m = C(n+dmax,
+dmax): 2002 at n=9 but 324632 at n=30, where `θ*θ'` alone is 785 GB and its
+inverse about 3.4e16 flops. That is the whole reason THIS could not be run on
+the neuronal scene.
+
+The push-through identity
+
+	θ'*inv(θ*θ' + ρI_m) == inv(θ'*θ + ρI_T)*θ'
+
+gives the same matrix from a T×T solve instead, with T the number of samples
+(300). It is an exact rearrangement, not an approximation, and θ itself is
+only 779 MB at n=30. Whichever side is smaller is used.
+"""
+function ridge_solve(θ::Matrix{Float64}, Y::Matrix{Float64}, ρ::Float64)
+	m,T = size(θ)
+	if m <= T
+		return Y*θ'*inv(θ*θ' + ρ*Id(m))
+	else
+		return (Y / (θ'*θ + ρ*Id(T))) * θ'
+	end
+end
+
+
+
+# ================================================================================
+"""
 	mySINDy(θ::Matrix{Float64}, Y::Matrix{Float64}, λ::Float64=.1, ρ::Float64=1., niter::Int64=10)
 
 Own implementation of SINDy. Adapted from [https://github.com/eurika-kaiser/SINDY-MPC/blob/master/utils/sparsifyDynamics.m], accessed on December 27, 2023.
@@ -197,7 +228,7 @@ function mySINDy(θ::Matrix{Float64}, Y::Matrix{Float64}, λ::Float64=.1, ρ::Fl
 	m,T = size(θ)
 
 	# Initialization of the coefficient matrix.
-	Ξ = Y*θ'*inv(θ*θ' + ρ*Id(m)) # Least square with Tikhonov regularization
+	Ξ = ridge_solve(θ, Y, ρ) # Least square with Tikhonov regularization
 
 	if !apply_hard_threshold
 		err = norm(Y - Ξ*θ,1)
@@ -216,7 +247,7 @@ function mySINDy(θ::Matrix{Float64}, Y::Matrix{Float64}, λ::Float64=.1, ρ::Fl
 		Ξ[smallinds] .= 0.
 		for i in 1:n
 			biginds = .~smallinds[i,:]
-			Ξ[i,biginds] = Y[[i,],:]*θ[biginds,:]'*inv(θ[biginds,:]*θ[biginds,:]' + ρ*Id(sum(biginds)))
+			Ξ[i,biginds] = ridge_solve(θ[biginds,:], Y[[i,],:], ρ)
 		end
 	end
 

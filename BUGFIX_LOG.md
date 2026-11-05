@@ -205,6 +205,33 @@ veclib / Julia equivalents to `SWEEP_THREADS_PER_JOB` (4 by default).
 Measured after the change: 7 threads per job instead of 127, 3377 total
 instead of 7993, at the same 19-way concurrency.
 
+**25. Tables mixed runs made under different training budgets — `experiments/fill_tables.py`**
+`load()` was handed every stage directory at once and indexes by seed, so the
+stage read last won each seat. The suites do not share a budget: the sparsity
+suite trains for 20000 epochs where the main suite trains for 8000. For
+ecological `ours` at seed 11 the three stages hold
+
+    main      0.5104   n_epochs=8000   stage1=1500  ramp=1000
+    noise     0.4960   n_epochs=8000   stage1=1500  ramp=1000
+    sparsity  0.4658   n_epochs=20000  stage1=2500  ramp=2000
+
+and `sparsity` sorts last, so seeds 11-13 of R1.4, R2.6a and R3.6a came from
+20000-epoch runs while seeds 14-20 came from 8000-epoch runs. 39 of the 481
+(scene, variant, seed) combinations at the main noise level were affected.
+*Fix:* each table is read from the suite that produced it - `main` and
+`main_neuronal` for those three tables, plus `holdout` for the tuning table's
+held-out column.
+
+**26. Recovered records lost their seed, collapsing four runs into one — `experiments/repair_results.py`**
+Records rebuilt from a bare `summary.json` carried `meta.seed = None`. Since
+`load()` keys by seed, every such record for a given (scene, variant) landed
+in the same slot and all but one were discarded. Four ecological kernel runs
+shared one seat, so that row reported n=7 while ten runs existed, and the
+sweep would not rerun them either, because `load_done` matches on job name
+and the job names were present.
+*Fix:* `repair_results` takes the seed and the noise level from the run tag
+when the metadata lacks them. All 25 rows that carry an n column now read 10.
+
 ## Open finding, not fixed: the Ours means in R2.5a and R3.7c are not in the records
 
 Checked cell by cell against every recorded run at the main noise level:

@@ -6,6 +6,7 @@ outputs are still on disk, so this walks every stage directory, re-reads the
 summary for each record, and rewrites results.jsonl in place.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,18 @@ def _scene_of(job: str):
         if f"_{t}_" in job or job.endswith(f"_{t}"):
             return t
     return None
+
+
+def _seed_of(job: str):
+    """Recover the seed from the run tag's trailing `_seed<N>`."""
+    m = re.search(r"_seed(\d+)(?:\D|$)", job)
+    return int(m.group(1)) if m else None
+
+
+def _noise_of(job: str):
+    """Recover the noise level from the run tag's `_noise<x>`."""
+    m = re.search(r"_noise([0-9.]+?)(?:_|$)", job)
+    return float(m.group(1)) if m else None
 
 
 def _variant_of(job: str) -> str:
@@ -50,6 +63,17 @@ def repair(stage_dir: Path) -> tuple[int, int, int]:
             meta["variant"] = _variant_of(job)
         if not meta.get("scene") or meta.get("scene") not in SCENE_TOKENS:
             meta["scene"] = _scene_of(job) or meta.get("scene")
+        # A record whose seed is missing collapses into a single None key in
+        # fill_tables.load(), which indexes by seed: four recovered kernel runs
+        # shared one slot and the row reported n=7 instead of 10. The run tag
+        # carries both the seed and the noise level, so take them from there.
+        if meta.get("seed") is None:
+            cfg = (r.get("summary") or {}).get("config") or {}
+            meta["seed"] = cfg.get("seed", _seed_of(job)) or _seed_of(job)
+        if meta.get("noise") is None:
+            cfg = (r.get("summary") or {}).get("config") or {}
+            noise = cfg.get("noise")
+            meta["noise"] = noise if noise is not None else _noise_of(job)
 
     fixed = 0
     for job, r in by_job.items():

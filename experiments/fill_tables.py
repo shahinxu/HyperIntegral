@@ -471,9 +471,21 @@ def restore_ours_rows(before, after):
 def main():
     doc = Path(sys.argv[1] if len(sys.argv) > 1 else "REBUTTAL_RESPONSE.md")
     import glob
-    # `smoke` is a short-budget end-to-end check, not a result stage
-    data = load(*[d for d in sorted(glob.glob("results/paper/*"))
-                  if os.path.basename(d) != "smoke"])
+
+    def dirs(*names):
+        want = set(names)
+        return [d for d in sorted(glob.glob("results/paper/*"))
+                if os.path.basename(d) in want]
+
+    # Each table is read from the suite that produced it. Loading every stage
+    # at once merged runs of the same (scene, variant, seed) that were made
+    # under different budgets - the sparsity suite trains for 20000 epochs
+    # against the main suite's 8000 - and since the dict is keyed by seed, the
+    # stage read last won. Seeds 11-13 of the main tables were coming from the
+    # sparsity runs while 14-20 came from the main runs.
+    data = load(*dirs("main", "main_neuronal"))
+    # the tuning table also needs the holdout runs for its held-out column
+    data_tuning = load(*dirs("main", "main_neuronal", "holdout"))
     lines = doc.read_text().splitlines()
     original = list(lines)
 
@@ -537,7 +549,7 @@ def main():
     # R1.5a/b, R2.5a, R2.5c, R3.7a/b/c are entirely the proposed method
     # and are maintained by hand; only baseline-bearing tables are written.
     fill_tuning(lines, [d for d in sorted(glob.glob('results/paper/*'))
-                        if os.path.basename(d).startswith('tuning')], data)
+                        if os.path.basename(d).startswith('tuning')], data_tuning)
     fill_noise(lines, [d for d in sorted(glob.glob('results/paper/*'))
                        if os.path.basename(d).startswith('noise')])
     # R2.5c, R3.7a/b/c and R1.5b are entirely the proposed method: left untouched.
