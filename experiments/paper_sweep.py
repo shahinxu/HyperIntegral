@@ -107,7 +107,14 @@ def kernel(tag, scene, noise, seed, cfg):
 
 
 def this_method(tag, scene, noise, seed, cfg):
-    """THIS is a Julia implementation driven through models/this/run.py."""
+    """THIS is a Julia implementation driven through models/this/run.py.
+
+    The neuronal scene used to be excluded here: THIS appeared never to
+    terminate at n=30. It was three quadratic accumulation patterns in the
+    Julia code, not a hang - see bugs 27-29 in BUGFIX_LOG.md. With those
+    fixed a neuronal run finishes in minutes, so the scene is no longer
+    skipped.
+    """
     return dict(name=tag, module="models.this.run", scene=scene,
                 cli=["--scene", scene, "--n_samples", str(cfg["n_samples"]),
                      "--noise", str(noise), "--seed", str(seed), "--python", PY,
@@ -141,11 +148,7 @@ def suite_main(cfg):
                 jobs.append(ours(f"ours_{b}", sc, noise, seed, cfg))
                 jobs.append(hyperpinn(f"hyperpinn_{b}", sc, noise, seed, cfg))
                 jobs.append(kernel(f"kernel_{b}", sc, noise, seed, cfg))
-                # THIS hangs indefinitely on the neuronal scene (n=30): the run
-                # produces no output at all and never terminates, so it is
-                # excluded there rather than blocking every later stage.
-                if sc != "neuronal":
-                    jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
+                jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
                 for form, est in (("integral", "stlsq"), ("derivative", "stlsq"),
                                   ("integral", "lstsq")):
                     jobs.append(sindy(f"sindy_{form}_{est}_{b}", sc, noise, seed, cfg, form, est))
@@ -179,10 +182,7 @@ def suite_noise(cfg):
                 jobs.append(ours(f"ours_{b}", sc, noise, seed, cfg))
                 jobs.append(hyperpinn(f"hyperpinn_{b}", sc, noise, seed, cfg))
                 jobs.append(kernel(f"kernel_{b}", sc, noise, seed, cfg))
-                # same exclusion as suite_main: THIS never terminates at n=30,
-                # and queueing it here held a worker slot per job until timeout
-                if sc != "neuronal":
-                    jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
+                jobs.append(this_method(f"this_{b}", sc, noise, seed, cfg))
                 jobs.append(sindy(f"sindy_integral_stlsq_{b}", sc, noise, seed, cfg,
                                   "integral", "stlsq"))
     return jobs
@@ -267,7 +267,7 @@ def suite_tuning(cfg):
                         meta={"method": "kernel", "variant": "tune_kernel", "scene": sc,
                               "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
                               "sigma_k": sg, "lam": lam}))
-            if sc != "neuronal":          # THIS does not terminate at n=30
+            if True:
                 for l1 in [1e-4, 1e-3, 1e-2, 1e-1]:
                     for rho in [1e-4, 1e-3, 1e-2, 1e-1]:
                         j = this_method(f"tune_this_l1{l1}_rho{rho}_{sc}",
@@ -355,7 +355,7 @@ def suite_holdout(cfg):
                         "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
                         "sigma_k": m["sigma_k"], "lam": m["lam"]}))
                 m = best.get((sc, "tune_this"))
-                if m and sc != "neuronal":
+                if m:
                     j = this_method(f"best_this_{b}", sc, noise, seed, cfg)
                     j["cli"] = j["cli"] + ["--lambda1", str(m["lambda1"]),
                                            "--rho", str(m["rho"])]

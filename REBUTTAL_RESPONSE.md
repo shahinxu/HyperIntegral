@@ -139,7 +139,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Neuronal (n=30) | Ours | 0.702 ± 0.011 | 0.697 ± 0.012 | 0.675 ± 0.014 | 0.634 ± 0.018 | 0.677 ± 0.012 | [0.668, 0.686] | 10 |
 | Neuronal (n=30) | HyperPINN | 0.482 ± 0.033 | 0.513 ± 0.048 | 0.509 ± 0.049 | 0.517 ± 0.120 | 0.505 ± 0.044 | [0.474, 0.537] | 10 |
 | Neuronal (n=30) | Kernel-based | 0.500 ± 0.000 | 0.518 ± 0.053 | 0.490 ± 0.074 | 0.522 ± 0.053 | 0.508 ± 0.032 | [0.485, 0.530] | 10 |
-| Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - | - |
+| Neuronal (n=30) | THIS | 0.498 ± 0.022 | 0.488 ± 0.031 | 0.465 ± 0.082 | 0.476 ± 0.098 | 0.482 ± 0.041 | [0.452, 0.511] | 10 |
 
 **Table R2.6b — Equal-budget hyperparameter tuning protocol**
 
@@ -168,7 +168,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.677 ± 0.012 |
 | Neuronal (n=30) | HyperPINN | lr=0.005, epochs=1500 | 0.426 | 0.514 ± 0.037 |
 | Neuronal (n=30) | Kernel-based | $\sigma_k$=100.0, $\lambda$=0.1 | 0.547 | 0.510 ± 0.026 |
-| Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - |
+| Neuronal (n=30) | THIS | $\lambda_1$=0.0001, $\rho$=0.001 | 0.470 | 0.483 ± 0.043 |
 | Neuronal (n=30) | Integral SINDy | threshold=0.0001, window=100 | 0.528 | 0.508 ± 0.028 |
 
 ---
@@ -196,7 +196,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Neuronal (n=30) | Ours | 0.677 ± 0.012 | [0.668, 0.686] | — | — | — | 10 |
 | Neuronal (n=30) | HyperPINN | 0.505 ± 0.044 | [0.474, 0.537] | -0.005 | 0.7084 | 1.0000 | 10 |
 | Neuronal (n=30) | Kernel-based | 0.508 ± 0.032 | [0.485, 0.530] | -0.003 | 0.6488 | 0.9219 | 10 |
-| Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
+| Neuronal (n=30) | THIS | 0.482 ± 0.041 | [0.452, 0.511] | -0.029 | 0.0389 | 0.0645 | 10 |
 | Neuronal (n=30) | Integral SINDy | 0.510 ± 0.016 | [0.498, 0.521] | -0.001 | 0.8822 | 1.0000 | 10 |
 
 **Table R3.6b — Sensitivity to noise level (Macro-AUC, mean ± std)**
@@ -216,7 +216,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Neuronal (n=30) | Ours | 0.712 ± 0.011 | 0.702 ± 0.014 | 0.677 ± 0.012 | 0.632 ± 0.024 | 0.575 ± 0.032 | 0.522 ± 0.038 |
 | Neuronal (n=30) | HyperPINN | 0.447 ± 0.026 | 0.447 ± 0.026 | 0.447 ± 0.025 | 0.446 ± 0.025 | 0.447 ± 0.026 | 0.447 ± 0.027 |
 | Neuronal (n=30) | Kernel-based | 0.484 ± 0.023 | 0.485 ± 0.027 | 0.487 ± 0.030 | 0.493 ± 0.041 | 0.491 ± 0.042 | 0.486 ± 0.022 |
-| Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
+| Neuronal (n=30) | THIS | 0.467 ± 0.017 | 0.465 ± 0.020 | 0.465 ± 0.020 | 0.466 ± 0.020 | 0.465 ± 0.021 | 0.459 ± 0.022 |
 | Neuronal (n=30) | Integral SINDy | 0.520 ± 0.012 | 0.521 ± 0.014 | 0.518 ± 0.017 | 0.518 ± 0.016 | 0.518 ± 0.009 | 0.502 ± 0.005 |
 
 ---

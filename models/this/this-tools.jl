@@ -26,24 +26,50 @@ _OUTPUT_:\\
 `d`: List of the agents involved in each monomial of `θ`. Each row has `dmax` elements. If one element appears multiple times, it means that its degree is larger that 1 in the monomial. If there are some zeros in the row, it means that the monomial has degree smaller than `dmax`. 
 """
 function get_θd(X::Matrix{Float64}, dmax::Int64, i0::Int64=1)
+	# Same rows, in the same order, as the straightforward version that grew
+	# θ with `vcat` inside the loop. That version copied the whole accumulated
+	# block on every append, which is O(m²) in the number of monomials. m is
+	# C(n+dmax, dmax): 2002 at n=9, but 324632 at n=30, where the copying
+	# alone ran for hours. Here each level's output is sized up front from its
+	# children and written once.
 	n,T = size(X)
 
-	θ = ones(1,T)
-	d = zeros(Int64,1,dmax)
-
 	if dmax == 0
-		return θ,d
-	else
-		for i in 1:n
-			θ0,d0 = get_θd(X[i:n,:],dmax-1,i)
-			θ = vcat(θ,repeat(X[[i,],:],size(θ0)[1],1).*θ0)
-			d = vcat(d,[d0 i*ones(Int64,size(d0)[1],1)])
-		end
-
-		d += (i0-1)*(d .> 0)
-
-		return θ,d
+		return ones(1,T), zeros(Int64,1,dmax)
 	end
+
+	kids = Vector{Tuple{Matrix{Float64},Matrix{Int64}}}(undef,n)
+	tot = 1
+	for i in 1:n
+		kids[i] = get_θd(X[i:n,:],dmax-1,i)
+		tot += size(kids[i][1],1)
+	end
+
+	θ = Matrix{Float64}(undef,tot,T)
+	d = zeros(Int64,tot,dmax)
+	@inbounds for t in 1:T
+		θ[1,t] = 1.0
+	end
+
+	r = 2
+	for i in 1:n
+		θ0,d0 = kids[i]
+		k = size(θ0,1)
+		@inbounds for a in 1:k, t in 1:T
+			θ[r+a-1,t] = X[i,t]*θ0[a,t]
+		end
+		@inbounds for a in 1:k
+			for c in 1:dmax-1
+				d[r+a-1,c] = d0[a,c]
+			end
+			d[r+a-1,dmax] = i
+		end
+		r += k
+	end
+
+	d .+= (i0-1).*(d .> 0)
+
+	return θ,d
 end
 
 function get_thetad(X::Matrix{Float64}, dmax::Int64, i0::Int64=1)

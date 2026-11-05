@@ -232,6 +232,51 @@ and the job names were present.
 *Fix:* `repair_results` takes the seed and the noise level from the run tag
 when the metadata lacks them. All 25 rows that carry an n column now read 10.
 
+## THIS on the neuronal scene: it was never a hang
+
+For most of this work THIS was recorded as `not run (THIS does not terminate
+at n=30)`. A probe had run 40 minutes with no output and every attempt exited
+non-zero, and the four affected cells were treated as unfillable.
+
+That was wrong. The Julia output is block-buffered, so an empty log says
+nothing about progress, and the run was not hanging - it was working through
+three separate quadratic accumulation patterns and one Gram matrix that does
+not fit in any machine. All four are fixed and a neuronal run now completes.
+
+**27. `inv(θθ' + ρI)` formed an m×m Gram matrix — `models/this/this.jl`**
+`mySINDy` solved the ridge system as `Y*θ'*inv(θ*θ' + ρI_m)`. m is the number
+of monomials of degree at most dmax, C(n+dmax, dmax): 2002 at n=9 and 1287 at
+n=8, but **324632 at n=30**, where `θ*θ'` alone is 785 GB and its inverse
+about 3.4e16 flops.
+*Fix:* the push-through identity `θ'*inv(θθ' + ρI_m) == inv(θ'θ + ρI_T)*θ'`
+gives the same matrix from a T×T solve (T=300), independent of m. `ridge_solve`
+picks whichever side is smaller. Verified against the direct form: exact where
+m <= T, relative error 1e-9 to 7.6e-8 where the identity is used, which is the
+conditioning of the ridge problem itself.
+
+**28. `get_θd` grew the dictionary with `vcat` — `models/this/this-tools.jl`**
+Each append recopied the whole accumulated block, so building θ was O(m²) in
+copying rather than O(m). At n=30 this alone ran over three and a half hours
+without finishing.
+*Fix:* size each level from its children and write it once. Verified
+bit-identical (`==`, not approximate) against the original for both θ and d at
+(n,dmax) = (4,3), (5,4), (6,5) and (9,5).
+
+**29. The adjacency reconstruction grew `Ainf` with `vcat` — `models/this/this.jl`**
+Same pattern in the loop that rebuilds the tensors. Without hard thresholding
+`coeff` is dense, so the loop runs over every squarefree monomial and `Ainf`
+passes five million rows; the recopying took more than seven hours.
+*Fix:* collect the blocks and `reduce(vcat, ...)` once per order.
+
+Regression check on the ecological scene, which was already recorded: the new
+code reproduces the stored run exactly.
+
+    recorded   2-edges 0.5864  3-edges 0.4468  4-edges 0.4681  5-edges 0.5827
+    new code   2-edges 0.5864  3-edges 0.4468  4-edges 0.4681  5-edges 0.5827
+
+A neuronal run also completes at n=60 (m = C(65,5) = 8.26 million, θ is
+19.8 GB), which the original could not approach.
+
 ## Open finding, not fixed: the Ours means in R2.5a and R3.7c are not in the records
 
 Checked cell by cell against every recorded run at the main noise level:

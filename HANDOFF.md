@@ -80,11 +80,11 @@ go hunting for one. Related: the n=30 preset
 version control and had to be regenerated from the n60 design rule, so neuronal
 numbers are not comparable to the paper's Table III.
 
-**THIS does not terminate on the neuronal scene.** A probe ran for 40+ minutes
-at n=30 and produced no output at all. All three recorded THIS neuronal runs
-exited non-zero. `suite_tuning` skips THIS on neuronal deliberately. The three
-affected cells are annotated `not run (THIS does not terminate at n=30)`, which
-`NOT_APPLICABLE` in `fill_tables.py` writes automatically.
+**THIS runs on every scene, including neuronal.** It was excluded from that
+scene for most of this work under the belief that it does not terminate at
+n=30. It does: see bugs 27-29. A run takes about 35 seconds. If you touch
+`models/this/this.jl` or `this-tools.jl`, keep the accumulation patterns out
+of the loops - that is what made it look like a hang.
 
 ---
 
@@ -163,14 +163,16 @@ the manifests alone.
 
 ## 6. State at handoff
 
-**Coverage 160/164 — every cell that can be measured is filled.** Every sweep
-ran to completion and no process is left running.
+**Coverage 164/164 — the table is complete.** Every sweep ran to completion
+and no process is left running.
 
-The four cells that remain are THIS on the neuronal scene, in R2.6a, R2.6c,
-R3.6a and R3.6b. They cannot be filled: THIS does not terminate at n=30. A
-probe ran 40 minutes with no output at all and every recorded attempt exited
-non-zero, so `suite_tuning` and `suite_noise` both skip it there and the cells
-carry `not run (THIS does not terminate at n=30)`. 160/164 is the ceiling.
+The four cells that were long marked `not run (THIS does not terminate at
+n=30)` are now measured. THIS was never hanging: its Julia code had three
+quadratic accumulation patterns and formed an m×m Gram matrix that is 785 GB
+at n=30, and its output is block-buffered, so an empty log looked like a hang.
+With bugs 27-29 fixed a neuronal run finishes in **35 seconds**. The fixes are
+behaviour-preserving - the ecological scene reproduces its stored run to four
+decimals.
 
 What each suite ended at:
 

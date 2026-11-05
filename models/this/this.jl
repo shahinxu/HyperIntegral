@@ -60,11 +60,23 @@ function this(X::Matrix{Float64}, Y::Matrix{Float64}, ooi::Vector{Int64}, dmax::
 		end
 	end
 
+	# Collect each order's blocks and concatenate once. Appending with `vcat`
+	# inside the loop recopied the whole accumulated matrix every time, which
+	# is O(rows²). Without hard thresholding `coeff` is dense, so at n=30 this
+	# loop runs over 174436 squarefree monomials and Ainf grows past five
+	# million rows: the recopying alone took more than seven hours. Same rows,
+	# same order.
+	blocks = Dict{Int64,Vector{Matrix{Float64}}}(o => Matrix{Float64}[] for o in 1:dmax+1)
 	for id in nz_idx
 		ii = idx_coeff[id]
 		jj = idx_mon[id]
 		o = length(jj)+1
-		Ainf[o] = vcat(Ainf[o],[ii repeat(jj',length(ii),1) coeff[ii,id]])
+		push!(blocks[o],[ii repeat(jj',length(ii),1) coeff[ii,id]])
+	end
+	for o in keys(blocks)
+		if !isempty(blocks[o])
+			Ainf[o] = vcat(Ainf[o],reduce(vcat,blocks[o]))
+		end
 	end
 
 	@info "Dictionary of inferred adjacency tensors built."

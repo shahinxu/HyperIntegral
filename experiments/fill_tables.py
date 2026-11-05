@@ -402,7 +402,6 @@ def fill_tuning(lines, stages, data):
 NOT_APPLICABLE = {
     # THIS hangs indefinitely on the 30-oscillator scene: it emits no output and
     # never terminates, so it has no result there.
-    ("neuronal", "this"): "not run (THIS does not terminate at n=30)",
 }
 NOT_TUNED = {"Kernel-based", "THIS"}
 

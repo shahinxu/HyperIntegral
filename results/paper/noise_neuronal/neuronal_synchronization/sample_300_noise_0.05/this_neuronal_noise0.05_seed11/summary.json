@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-05T14:09:39",
+  "method": "this",
+  "scene": "neuronal_synchronization",
+  "config": {
+    "scene": "neuronal",
+    "n_nodes": 30,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.05,
+    "bin_thresh": 0.0001
+  },
+  "auc": {
+    "2-edges": 0.4762,
+    "3-edges": 0.4869,
+    "4-edges": 0.3941,
+    "5-edges": 0.5298
+  },
+  "extra_metrics": {
+    "relerr": 1.0247506868671326e-11,
+    "macro_auc": 0.47175000000000006
+  }
+}
