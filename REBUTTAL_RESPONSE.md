@@ -157,19 +157,19 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 |---|---|---|---|---|
 | Ecological (n=9) | Ours | lr=0.005, n_intervals=128 | 0.742 | 0.733 ± 0.013 |
 | Ecological (n=9) | HyperPINN | lr=0.0005, epochs=14000 | 0.678 | 0.659 ± 0.022 |
-| Ecological (n=9) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.719 | 0.511 ± 0.039 |
-| Ecological (n=9) | THIS | $\lambda_1$=0.0001, $\rho$=0.1 | 0.623 | 0.547 ± 0.055 |
+| Ecological (n=9) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.719 | 0.520 ± 0.036 |
+| Ecological (n=9) | THIS | $\lambda_1$=0.0001, $\rho$=0.1 | 0.623 | 0.562 ± 0.041 |
 | Ecological (n=9) | Integral SINDy | threshold=0.0001, window=20 | 0.504 | 0.477 ± 0.056 |
 | Social (n=8) | Ours | lr=0.001, n_intervals=16 | 0.725 | 0.719 ± 0.015 |
-| Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.581 ± 0.076 |
-| Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.586 | 0.496 ± 0.074 |
-| Social (n=8) | THIS | $\lambda_1$=0.0001, $\rho$=0.0001 | 0.530 | 0.429 ± 0.077 |
-| Social (n=8) | Integral SINDy | threshold=0.0001, window=5 | 0.511 | 0.491 ± 0.013 |
+| Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.606 ± 0.067 |
+| Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.586 | 0.475 ± 0.078 |
+| Social (n=8) | THIS | $\lambda_1$=0.0001, $\rho$=0.0001 | 0.530 | 0.426 ± 0.071 |
+| Social (n=8) | Integral SINDy | threshold=0.0001, window=5 | 0.511 | 0.489 ± 0.032 |
 | Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.677 ± 0.012 |
-| Neuronal (n=30) | HyperPINN | lr=0.005, epochs=1500 | 0.426 | 0.515 ± 0.033 |
-| Neuronal (n=30) | Kernel-based | $\sigma_k$=100.0, $\lambda$=0.1 | 0.547 | 0.507 ± 0.034 |
+| Neuronal (n=30) | HyperPINN | lr=0.005, epochs=1500 | 0.426 | 0.514 ± 0.037 |
+| Neuronal (n=30) | Kernel-based | $\sigma_k$=100.0, $\lambda$=0.1 | 0.547 | 0.510 ± 0.026 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - |
-| Neuronal (n=30) | Integral SINDy | threshold=0.0001, window=100 | 0.528 | 0.510 ± 0.017 |
+| Neuronal (n=30) | Integral SINDy | threshold=0.0001, window=100 | 0.528 | 0.508 ± 0.028 |
 
 ---
 
@@ -214,7 +214,7 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Social (n=8) | THIS | 0.445 ± 0.129 | 0.478 ± 0.022 | 0.474 ± 0.026 | 0.475 ± 0.016 | 0.435 ± 0.067 | 0.438 ± 0.050 |
 | Social (n=8) | Integral SINDy | 0.500 ± 0.045 | 0.503 ± 0.009 | 0.489 ± 0.012 | 0.503 ± 0.001 | 0.507 ± 0.007 | 0.503 ± 0.001 |
 | Neuronal (n=30) | Ours | 0.712 ± 0.011 | 0.702 ± 0.014 | 0.677 ± 0.012 | 0.632 ± 0.024 | 0.575 ± 0.032 | 0.522 ± 0.038 |
-| Neuronal (n=30) | HyperPINN | 0.447 ± 0.026 | 0.447 ± 0.026 | 0.447 ± 0.025 | 0.446 ± 0.025 | 0.447 ± 0.026 | - |
+| Neuronal (n=30) | HyperPINN | 0.447 ± 0.026 | 0.447 ± 0.026 | 0.447 ± 0.025 | 0.446 ± 0.025 | 0.447 ± 0.026 | 0.447 ± 0.027 |
 | Neuronal (n=30) | Kernel-based | 0.484 ± 0.023 | 0.485 ± 0.027 | 0.487 ± 0.030 | 0.493 ± 0.041 | 0.491 ± 0.042 | 0.486 ± 0.022 |
 | Neuronal (n=30) | THIS | not run (THIS does not terminate at n=30) | - | - | - | - | - |
 | Neuronal (n=30) | Integral SINDy | 0.520 ± 0.012 | 0.521 ± 0.014 | 0.518 ± 0.017 | 0.518 ± 0.016 | 0.518 ± 0.009 | 0.502 ± 0.005 |
