@@ -319,6 +319,24 @@ which this work is under instruction not to touch, and the discrepancy is not
 a code defect: the pipeline reproduces the recorded runs correctly. Deciding
 what the tables should say is the author's call, not something to patch.
 
+One hypothesis for why the measured integral runs come out below their own
+derivative ablation was checked and ruled out. The integral residual
+`(Δx − ∫f dt)²` carries a factor of the window length where the derivative
+residual `(dx/dt − f)²` does not, so under a shared `lambda_physics` the
+integral physics term could have been systematically under-weighted. Measured
+on ecological, seed 11, at equal budget, it is not:
+
+    integral    L_phys = 1.15e-03
+    derivative  L_phys = 2.35e-04
+
+The integral term is the larger of the two, so the weighting is not the
+explanation and this is not a scaling defect. Noted so the check is not
+repeated.
+
+One related observation, not acted on because it would change the method:
+window lengths are drawn as `max_window * rand`, so a share of the sampled
+windows are near-degenerate and carry almost no signal.
+
 Reproduce with `python -m experiments.check_ours_rows`, or
 `--side-by-side` to see both numbers for every cell. The script is read-only.
 
