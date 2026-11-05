@@ -321,6 +321,39 @@ the four cells that carried `not run` now carry measured values. Coverage is
 
 ## Open finding, not fixed: the proposed method's means are not in the records
 
+### Where those means come from: nowhere in the repository
+
+Searched both result trees - the current `results/paper` and
+`results/rebuttal`, the superseded first round - for a group of runs that
+reproduces each printed row. The test is whole-row: all four per-order means
+must come from the same (tree, scene, variant, noise) group, because matching
+one cell at a time proves nothing when three-decimal values collide and there
+are 431 candidate groups.
+
+| Row set | Rows reproduced |
+|---|---|
+| R2.5a Derivative (control, not an Ours row) | **3/3** |
+| R2.5a Integral (ours) | 0/3 |
+| R3.7c (every row is ours) | 0/12 |
+
+The control reproduces exactly, and names its source
+(`paper/ablation`, `derivative_loss`, sigma=0.02), so the search works. The
+Ours rows match nothing, in either tree. The same values do appear in
+`REBUTTAL_RESPONSE-v3.md`, `-v4.md` and `REBUTTAL_EXPERIMENTS.md`, which are
+hand-written documents, not run output.
+
+This is as far as it can be taken without editing the rows. What the tables
+should say is the author's decision. Reproduce with
+`python -m experiments.check_ours_rows`.
+
+### The lost n=30 neuronal preset is not recoverable from the runs either
+
+`results/rebuttal` holds neuronal runs only at n=60, so no first-round record
+carries the n=30 hyperedge set. The preset in the tree was regenerated from
+the n60 design rule and checked for within:cross = 2.00, equal per-module
+counts and full node coverage, but it is not the original, and neuronal
+results are therefore not comparable to the paper's Table III.
+
 Checked cell by cell against the ablation suite at the main noise level. The
 scope is wider than it first appeared - it is every ablation table, not just
 two:

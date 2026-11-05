@@ -95,6 +95,68 @@ def audit(lines, tag, rowmap, data, side_by_side):
             print(f"    {'measured':10s} " + "  ".join(f"{x:>15s}" for x in measured_cells))
 
 
+def all_groups():
+    """Every (tree, scene, variant, noise) group that holds all four orders.
+
+    Both result trees are searched, `results/rebuttal` included: that is the
+    superseded first round, so a row carried over from an earlier experiment
+    would still turn up here.
+    """
+    grp = defaultdict(lambda: defaultdict(dict))
+    for f in (glob.glob("results/*/*/results.jsonl")
+              + glob.glob("results/*/results.jsonl")):
+        parts = f.split("/")
+        tree = "/".join(parts[1:3]) if len(parts) > 3 else parts[1]
+        for line in open(f):
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            m = r.get("meta") or {}
+            auc = r.get("auc") or (r.get("summary") or {}).get("auc") or {}
+            k = (tree, m.get("scene"), m.get("variant"), m.get("noise"))
+            for o in ORDERS:
+                if auc.get(o) is not None:
+                    grp[k][o][m.get("seed")] = auc[o]
+    out = []
+    for k, od in grp.items():
+        if all(o in od and od[o] for o in ORDERS):
+            out.append((k, [round(st.mean(list(od[o].values())), 3) for o in ORDERS]))
+    return out
+
+
+def provenance(lines, tag, pred, label, groups):
+    """Can a whole printed row be reproduced by one group of runs?
+
+    Cell by cell this question is meaningless - three-decimal values collide
+    by chance, and with a few hundred groups most values match something. All
+    four orders of a row must therefore come from the same group.
+    """
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"**Table {tag}"))
+    tot = hit = 0
+    for l in lines[start:start + 26]:
+        if not l.startswith("|"):
+            continue
+        c = [x.strip() for x in l.strip("|").split("|")]
+        if not pred(c):
+            continue
+        want = []
+        for cv in c[2:6]:
+            mm = re.match(r"([\d.]+) ± ", cv)
+            if mm:
+                want.append(float(mm.group(1)))
+        if len(want) != 4:
+            continue
+        tot += 1
+        found = [k for k, v in groups if v == want]
+        if found:
+            hit += 1
+            print(f"    {c[0]} / {c[1]}  <- {found[0]}")
+    print(f"  {label}: {hit}/{tot} rows reproduced")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("doc", nargs="?", default="REBUTTAL_RESPONSE.md")
@@ -106,6 +168,17 @@ def main():
     data = measured()
     for tag, rowmap in TABLES.items():
         audit(lines, tag, rowmap, data, a.side_by_side)
+
+    print("\nWhole-row provenance, searched across every result tree")
+    groups = all_groups()
+    print(f"  candidate groups holding all four orders: {len(groups)}")
+    provenance(lines, "R2.5a", lambda c: c[1] == "Derivative",
+               "R2.5a Derivative (control, not an Ours row)", groups)
+    provenance(lines, "R2.5a", lambda c: c[1] == "Integral (ours)",
+               "R2.5a Integral (ours)", groups)
+    provenance(lines, "R3.7c",
+               lambda c: c[0].startswith(("Ecological", "Social", "Neuronal")),
+               "R3.7c (every row is ours)", groups)
 
 
 if __name__ == "__main__":
