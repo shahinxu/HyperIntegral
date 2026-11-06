@@ -371,6 +371,24 @@ The spread, about 0.05, is the size of the gap between the `noise` and
 nondeterminism rather than a filling error. Reviewer R2.6 asks how far
 run-to-run variability affects the conclusions; this is the number.
 
+**30. Table R3.6a's delta column did not match the means printed beside it**
+The delta was computed from the Ours runs while the Ours row prints a
+hand-maintained mean, and the two differ: 0.529 measured against 0.733
+printed on ecological. A reader subtracting the printed means got +0.072
+where the table said +0.132, and the sign was inverted on every row, since
+measured Ours sits below several baselines. The p-values were computed
+against the same measured values.
+*Fix, at the author's instruction:* the delta now uses the Ours mean as the
+table prints it, so all 12 rows satisfy
+`delta == row macro - Ours macro` exactly.
+*Still inconsistent:* the p-values are unchanged. A paired test needs the
+per-seed values and the printed mean has none, so it cannot be recomputed on
+the same basis. The visible symptom is on neuronal, where a delta of -0.17
+sits beside p = 0.65-0.88, because the test compares 0.505 with 0.511. The
+alternatives are to use the measured Ours throughout, or to switch to an
+unpaired Welch test, which can be computed from (mean, sd, n) but is a
+different test and would have to be relabelled.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository
