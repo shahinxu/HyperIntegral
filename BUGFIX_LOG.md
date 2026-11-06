@@ -389,10 +389,36 @@ interval, the delta and both tests all come from one source, and the p-values
 move from 0.15-0.89 to below 1e-4, the earlier figures having compared the
 baselines against measured Ours at 0.529.
 
-Scenes with no entry in that file keep their hand-maintained row and the
-delta-from-printed-mean behaviour, so social and neuronal still show a delta
-beside a p-value computed on a different basis. Supplying their per-seed
-values closes them the same way.
+All three scenes are now in that file, so the whole of R3.6a - every mean,
+interval, delta and both tests - comes from one source. What the three sets
+reproduce:
+
+| scene | from the per-seed values | previously printed |
+|---|---|---|
+| ecological | 0.730 +- 0.012 | 0.733 +- 0.013 |
+| social | 0.716 +- 0.015 | 0.719 +- 0.015 |
+| neuronal | 0.677 +- 0.013 | 0.677 +- 0.012 |
+
+Neuronal reproduces its mean exactly; the other two sit 0.003 below what was
+printed, with the standard deviations matching. Worth knowing when tracing
+the remaining tables, whose Ours means are still unaccounted for.
+
+The p-values move a long way, because they had been comparing the baselines
+against measured Ours rather than these runs: on neuronal every one of the
+four drops from 0.65-0.88 to below 1e-4, which removes the table's most
+visible contradiction, a delta of -0.17 printed beside p = 0.88.
+
+Every Wilcoxon p reads 0.0020. That is 2/2^10, the smallest two-sided value
+the test can return at n = 10, and it is reached because the proposed method
+wins on all ten seeds in all twelve comparisons. The paired t still separates
+them: on social it gives 4e-04 against HyperPINN and 2e-11 against Integral
+SINDy, both of which Wilcoxon calls 0.0020.
+
+The delta is formed from the two means as the table rounds them, not at full
+precision. Ecological HyperPINN is the case that forces this: 0.6606 - 0.7301
+is -0.0695, which prints as -0.070 beside 0.661 and 0.730 and cannot be
+reproduced by subtracting them. All 12 rows now satisfy
+`delta == row macro - Ours macro` as printed.
 
 ## Open finding, not fixed: the proposed method's means are not in the records
 

@@ -128,8 +128,15 @@ def ci95(vals):
     return f"[{v.mean() - t * sem:.3f}, {v.mean() + t * sem:.3f}]"
 
 
-def paired(a, b):
-    """delta, t-p, wilcoxon-p on the seeds both arms share."""
+def paired(a, b, nd=3):
+    """delta, t-p, wilcoxon-p on the seeds both arms share.
+
+    The delta is taken from the two means *as the table rounds them*, not from
+    full precision. Its purpose is to let a reader reproduce it by subtracting
+    the printed figures, and a true delta landing near a rounding boundary
+    otherwise disagrees with them in the last digit: 0.6606 - 0.7301 prints as
+    -0.070 beside 0.661 and 0.730.
+    """
     seeds = sorted(set(a) & set(b))
     if len(seeds) < 2 or sps is None:
         return "-", "-", "-"
@@ -141,7 +148,8 @@ def paired(a, b):
         wp = sps.wilcoxon(x, y).pvalue
     except ValueError:
         wp = float("nan")
-    return f"{x.mean() - y.mean():+.3f}", f"{tp:.4f}", ("-" if np.isnan(wp) else f"{wp:.4f}")
+    delta = round(float(x.mean()), nd) - round(float(y.mean()), nd)
+    return f"{delta:+.3f}", f"{tp:.4f}", ("-" if np.isnan(wp) else f"{wp:.4f}")
 
 
 def fill_table(lines, start, end, fn):
