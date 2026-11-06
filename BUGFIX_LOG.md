@@ -465,6 +465,40 @@ cannot be a different ablation; it has to come from a different batch of
 `no_clip` runs. The Ours side of the document is therefore not the product of
 one set of runs.
 
+**33. p-values below 5e-5 printed as 0.0000**
+`f"{p:.4f}"` rounded every small p-value to `0.0000`, which a p-value can
+never be. Thirteen cells of R3.6a read that way; the smallest is the paired t
+against Integral SINDy on social, 2e-11.
+*Fix:* `_pfmt` prints `<0.0001` below the resolution of the format.
+
+### R3.7a's p column does not come from one place either
+
+Comparing the printed column against a paired t on the recorded 3-seed
+ablation runs: two cells reproduce exactly, ten do not, and the ten disagree
+in one direction.
+
+| row | printed | measured, n=3 |
+|---|---|---|
+| ecological / Derivative PINN | 0.0042 | **0.0042** |
+| social / Without bounded | 0.2267 | **0.2267** |
+| ecological / Without staged lambda | 0.0010 | 0.5794 |
+| ecological / Without bounded | 0.0010 | 0.9217 |
+| social / Without pre-activation clipping | 0.0038 | 0.9628 |
+| neuronal / Without pre-activation clipping | 0.0131 | 0.7023 |
+| ... six more | 0.0010-0.0131 | 0.13-0.41 |
+
+Two cells matching to four decimals is not chance, so part of the column was
+computed from these runs. The rest reports far stronger significance than
+three seeds at two degrees of freedom can support.
+
+`0.0010` appears five times exactly. A paired t has no floor there - R3.6a
+reaches 2e-11 - but 1/1000 is the floor of a permutation test at 1000
+resamples, and the column is headed `paired t p`. Either the label is wrong
+or the five values cannot all be paired-t results.
+
+Left as printed: this is the Ours side of an ablation table, and resolving it
+needs the per-seed values behind those rows.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository

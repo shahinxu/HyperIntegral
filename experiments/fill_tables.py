@@ -128,6 +128,18 @@ def ci95(vals):
     return f"[{v.mean() - t * sem:.3f}, {v.mean() + t * sem:.3f}]"
 
 
+def _pfmt(p, nd=4):
+    """A p-value at four decimals, or `<0.0001` when it rounds to zero.
+
+    `f"{p:.4f}"` printed 0.0000 for everything below 5e-5 - the paired t
+    against Integral SINDy on social is 2e-11 - and a p-value is never zero.
+    """
+    if np.isnan(p):
+        return "-"
+    floor = 10.0 ** (-nd)
+    return f"<{floor:.{nd}f}" if p < floor else f"{p:.{nd}f}"
+
+
 def paired(a, b, nd=3):
     """delta, t-p, wilcoxon-p on the seeds both arms share.
 
@@ -149,7 +161,7 @@ def paired(a, b, nd=3):
     except ValueError:
         wp = float("nan")
     delta = round(float(x.mean()), nd) - round(float(y.mean()), nd)
-    return f"{delta:+.3f}", f"{tp:.4f}", ("-" if np.isnan(wp) else f"{wp:.4f}")
+    return f"{delta:+.3f}", _pfmt(tp), ("-" if np.isnan(wp) else _pfmt(wp))
 
 
 def fill_table(lines, start, end, fn):
