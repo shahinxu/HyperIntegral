@@ -183,11 +183,11 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 
 | Scene | Method | Macro-AUC (mean ± std) | 95% CI | Δ vs Ours | paired t p | Wilcoxon p | n seeds |
 |---|---|---|---|---|---|---|---|
-| Ecological (n=9) | Ours | 0.733 ± 0.013 | [0.723, 0.743] | — | — | — | 10 |
-| Ecological (n=9) | HyperPINN | 0.661 ± 0.022 | [0.645, 0.676] | -0.072 | 0.0003 | 0.0020 | 10 |
-| Ecological (n=9) | Kernel-based | 0.524 ± 0.049 | [0.489, 0.559] | -0.209 | 0.8870 | 0.5566 | 10 |
-| Ecological (n=9) | THIS | 0.545 ± 0.053 | [0.507, 0.583] | -0.188 | 0.6673 | 0.9219 | 10 |
-| Ecological (n=9) | Integral SINDy | 0.479 ± 0.054 | [0.441, 0.518] | -0.254 | 0.1492 | 0.0840 | 10 |
+| Ecological (n=9) | Ours | 0.730 ± 0.012 | [0.721, 0.739] | — | — | — | 10 |
+| Ecological (n=9) | HyperPINN | 0.661 ± 0.022 | [0.645, 0.676] | -0.070 | 0.0000 | 0.0020 | 10 |
+| Ecological (n=9) | Kernel-based | 0.524 ± 0.049 | [0.489, 0.559] | -0.206 | 0.0000 | 0.0020 | 10 |
+| Ecological (n=9) | THIS | 0.545 ± 0.053 | [0.507, 0.583] | -0.185 | 0.0000 | 0.0020 | 10 |
+| Ecological (n=9) | Integral SINDy | 0.479 ± 0.054 | [0.441, 0.518] | -0.251 | 0.0000 | 0.0020 | 10 |
 | Social (n=8) | Ours | 0.719 ± 0.015 | [0.709, 0.729] | — | — | — | 10 |
 | Social (n=8) | HyperPINN | 0.586 ± 0.073 | [0.533, 0.638] | -0.133 | 0.4790 | 0.3750 | 10 |
 | Social (n=8) | Kernel-based | 0.503 ± 0.073 | [0.451, 0.556] | -0.216 | 0.0010 | 0.0059 | 10 |

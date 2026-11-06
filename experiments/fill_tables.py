@@ -58,6 +58,22 @@ METHOD_ROW = {
 
 MAIN_NOISE = 0.02
 
+# Per-seed macro-AUC for the proposed method, supplied by the author for runs
+# that are not in results/paper. Where a scene appears here, its Ours row, the
+# row's confidence interval and the paired tests in R3.6a are all derived from
+# these numbers, so the three agree. Scenes absent from the file keep the
+# hand-maintained row untouched, as before.
+def _author_ours():
+    f = Path(__file__).with_name("ours_seed_values.json")
+    if not f.exists():
+        return {}
+    raw = json.loads(f.read_text()).get("macro_auc", {})
+    # positional match to the baselines' seeds 11..20
+    return {sc: {11 + i: v for i, v in enumerate(vals)} for sc, vals in raw.items()}
+
+
+AUTHOR_OURS = _author_ours()
+
 
 def load(*stage_dirs, noise=MAIN_NOISE):
     """per-(scene, variant) -> {order/macro -> {seed: value}}
@@ -440,7 +456,7 @@ OURS_LABEL = re.compile(r"\bOurs\b|Full method|Derivative PINN|Without staged|"
                         r"Without bounded|Without pre-activation", re.I)
 
 
-def restore_ours_rows(before, after):
+def restore_ours_rows(before, after, sig_span=(-1, -1)):
     """Put back every row that belongs to the proposed method.
 
     Those rows are maintained by hand, so the filler must never rewrite them.
@@ -449,6 +465,7 @@ def restore_ours_rows(before, after):
     this reverts them wholesale as a final pass.
     """
     OURS_ONLY_TABLES = ("R1.5a", "R1.5b", "R2.5a", "R2.5c", "R3.7a", "R3.7b", "R3.7c")
+    sig_lo, sig_hi = sig_span
     spans = []
     for tag in OURS_ONLY_TABLES:
         try:
@@ -462,7 +479,13 @@ def restore_ours_rows(before, after):
         if b == a:
             continue
         in_ours_table = any(lo <= i < hi for lo, hi in spans)
-        if in_ours_table or OURS_LABEL.search(b):
+        # Only inside R3.6a, and only for a scene whose per-seed values the
+        # author supplied, is the Ours row derived rather than hand-kept. The
+        # exemption is deliberately this narrow: widening it to the scene let
+        # measured values overwrite the hand-kept rows of R2.6c and R3.6b too.
+        scene_cell = b.strip("|").split("|")[0].strip() if b.startswith("|") else ""
+        authored = (sig_lo <= i < sig_hi) and SCENE_ROW.get(scene_cell) in AUTHOR_OURS
+        if (in_ours_table or OURS_LABEL.search(b)) and not authored:
             after[i] = b
     return after
 
@@ -527,7 +550,7 @@ def main():
     s, e = table_bounds(lines, "R2.6a"); fill_table(lines, s, e, rowfill_var)
 
     # --- R3.6a: Scene | Method | macro | CI | delta | t p | wilcoxon p | n ---
-    s, e = table_bounds(lines, "R3.6a")
+    sig_s, sig_e = s, e = table_bounds(lines, "R3.6a")
     # The delta column has to agree with the two numbers printed beside it, so
     # it is taken from the Ours mean as the table shows it rather than from
     # the runs. Those differ: the Ours rows are maintained by hand and their
@@ -552,23 +575,27 @@ def main():
     def rowfill_sig(cells):
         sc = SCENE_ROW.get(cells[0]); mv = METHOD_ROW.get(cells[1])
         if _is_ours(mv):
-            return None   # the proposed method's rows are maintained by hand
-        if not sc or not mv or _is_ours(mv):
+            # Filled only where the author supplied the per-seed values; the
+            # rest stay by hand.
+            av = AUTHOR_OURS.get(sc)
+            if not av:
+                return None
+            return ([cells[0], cells[1], cell(av), ci95(av), "—", "—", "—",
+                     str(len(av))] + ["-"] * len(cells))[:len(cells)]
+        if not sc or not mv:
             return None
         mac = get(sc, mv).get("macro", {})
-        ref = get(sc, "ours").get("macro", {})
+        av = AUTHOR_OURS.get(sc)
+        ref = av if av else get(sc, "ours").get("macro", {})
         out = [cells[0], cells[1], cell(mac), ci95(mac)]
-        if mv == "ours":
-            out += ["—", "—", "—"]
+        if av:
+            # one source for the row, its interval and both tests
+            out += list(paired(mac, ref))
         else:
-            _, tp, wp = paired(mac, ref)
+            _, tp, wp = paired(mac, get(sc, "ours").get("macro", {}))
             base = np.mean(list(mac.values())) if mac else None
-            ours_printed = printed_ours.get(sc)
-            if base is not None and ours_printed is not None:
-                delta = f"{base - ours_printed:+.3f}"
-            else:
-                delta = "-"
-            out += [delta, tp, wp]
+            op = printed_ours.get(sc)
+            out += [f"{base - op:+.3f}" if base is not None and op else "-", tp, wp]
         out.append(str(len(mac)))
         return (out + ["-"] * len(cells))[:len(cells)]
 
@@ -583,7 +610,7 @@ def main():
     # R2.5c, R3.7a/b/c and R1.5b are entirely the proposed method: left untouched.
 
     annotate_unavailable(lines)
-    lines = restore_ours_rows(original, lines)
+    lines = restore_ours_rows(original, lines, sig_span=(sig_s, sig_e))
     doc.write_text("\n".join(lines) + "\n")
     print(f"filled {doc}")
     for tag in ("R1.4", "R2.5c", "R3.6b", "R2.6b", "R2.6c", "R1.5a", "R1.5b", "R2.5a", "R2.6a", "R3.6a", "R3.7a", "R3.7b", "R3.7c"):

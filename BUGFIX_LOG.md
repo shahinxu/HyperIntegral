@@ -381,13 +381,18 @@ against the same measured values.
 *Fix, at the author's instruction:* the delta now uses the Ours mean as the
 table prints it, so all 12 rows satisfy
 `delta == row macro - Ours macro` exactly.
-*Still inconsistent:* the p-values are unchanged. A paired test needs the
-per-seed values and the printed mean has none, so it cannot be recomputed on
-the same basis. The visible symptom is on neuronal, where a delta of -0.17
-sits beside p = 0.65-0.88, because the test compares 0.505 with 0.511. The
-alternatives are to use the measured Ours throughout, or to switch to an
-unpaired Welch test, which can be computed from (mean, sd, n) but is a
-different test and would have to be relabelled.
+*Resolved for ecological:* the author supplied the ten per-seed values, now
+in `experiments/ours_seed_values.json`. They give 0.730 +- 0.012 and
+[0.721, 0.739], which is what that row should read rather than the
+0.733 +- 0.013 printed before. With the per-seed values in hand the row, its
+interval, the delta and both tests all come from one source, and the p-values
+move from 0.15-0.89 to below 1e-4, the earlier figures having compared the
+baselines against measured Ours at 0.529.
+
+Scenes with no entry in that file keep their hand-maintained row and the
+delta-from-printed-mean behaviour, so social and neuronal still show a delta
+beside a p-value computed on a different basis. Supplying their per-seed
+values closes them the same way.
 
 ## Open finding, not fixed: the proposed method's means are not in the records
 
