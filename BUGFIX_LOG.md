@@ -319,6 +319,58 @@ identical element-for-element, `relerr` difference 0.0, and every order of
 the four cells that carried `not run` now carry measured values. Coverage is
 164/164.
 
+## Measured, not fixed: what the Ours runs actually do
+
+Ran `experiments/diagnose_ours.py` on ecological (n=9, 372 candidates, seed
+11) to find out whether the near-chance AUC is an optimisation failure that
+could be repaired, or the method's behaviour on this data.
+
+**The optimiser works.** Only 1.3-4.0% of W stays within 0.05 of its init,
+the median move is 0.28-0.30, and 45-47 candidates move more than 0.5. This
+is not the frozen-gradient failure of bug 2.
+
+**Clipping ties up a third of the truth.** W ends in [-2.000, ~0.4], the
+lower bound being exactly `clip_c`. Per order, true hyperedges sitting on
+that floor, where they tie with floored negatives:
+
+| order | candidates | true | at floor | true at floor | true median | neg median |
+|---|---|---|---|---|---|---|
+| 2 | 36 | 18 | 15 | 6 | -1.114 | -1.425 |
+| 3 | 84 | 12 | 37 | 4 | -1.327 | -1.780 |
+| 4 | 126 | 6 | 30 | 3 | -1.687 | -1.688 |
+| 5 | 126 | 3 | 3 | 1 | -1.434 | -1.651 |
+
+So there is signal - the true edges sit 0.22 to 0.45 above the negatives at
+orders 2, 3 and 5 - and the floor is throwing part of it away. At order 2 the
+true median is 0.31 above the negatives while the AUC is 0.49, because the
+six floored true edges tie with fifteen floored negatives and lose to the
+three negatives above the floor.
+
+**The ablations say the same thing, and disagree with the printed table.**
+Measured over the ablation suite at sigma=0.02:
+
+| scene | full | no_clip | no_bounded |
+|---|---|---|---|
+| ecological | 0.447 | **0.486** | 0.456 |
+| social | 0.612 | 0.610 | **0.700** |
+| neuronal | 0.495 | 0.491 | **0.551** |
+
+Removing the clipping helps ecological by 0.039; removing the bounded
+parameterisation altogether helps social by 0.088 and neuronal by 0.056. The
+printed R3.7a gives every one of these a negative delta, i.e. the opposite
+conclusion. This is not a code defect - the implementation follows the paper
+- so it is recorded, not changed. Reviewer R3.7 asked for exactly this
+ablation.
+
+**Same seed, different answer.** Five runs of one configuration at seed 11
+gave macro 0.510, 0.515, 0.530, 0.557, 0.563, and the count of candidates on
+the clipping floor ranged from 3 to 86. `set_global_seed` seeds Python, NumPy
+and Torch, but `index_add_` on CUDA accumulates in nondeterministic order.
+The spread, about 0.05, is the size of the gap between the `noise` and
+`sigma_h` tables for the same configuration, which is therefore
+nondeterminism rather than a filling error. Reviewer R2.6 asks how far
+run-to-run variability affects the conclusions; this is the number.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository
