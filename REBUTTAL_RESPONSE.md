@@ -232,17 +232,17 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 | Ecological (n=9) | Full method | 0.828 ± 0.032 | 0.742 ± 0.017 | 0.712 ± 0.037 | 0.650 ± 0.037 | 0.733 ± 0.028 | — | — |
 | Ecological (n=9) | Derivative PINN (same architecture, cf. Table R2.5a) | 0.653 ± 0.008 | 0.535 ± 0.019 | 0.633 ± 0.022 | 0.865 ± 0.049 | 0.672 ± 0.018 | -0.061 | 0.0042 |
 | Ecological (n=9) | Without staged λ scheduling | 0.685 ± 0.092 | 0.612 ± 0.013 | 0.605 ± 0.118 | 0.558 ± 0.255 | 0.615 ± 0.113 | -0.118 | 0.0010 |
-| Ecological (n=9) | Without gradient clipping (sub-ablation) | 0.764 ± 0.035 | 0.688 ± 0.069 | 0.633 ± 0.077 | 0.574 ± 0.063 | 0.665 ± 0.051 | -0.068 | 0.0126 |
+| Ecological (n=9) | Without pre-activation clipping (sub-ablation) | 0.764 ± 0.035 | 0.688 ± 0.069 | 0.633 ± 0.077 | 0.574 ± 0.063 | 0.665 ± 0.051 | -0.068 | 0.0126 |
 | Ecological (n=9) | Without bounded tensor parameterization | 0.710 ± 0.026 | 0.645 ± 0.109 | 0.628 ± 0.126 | 0.582 ± 0.237 | 0.641 ± 0.119 | -0.092 | 0.0010 |
 | Social (n=8) | Full method | 0.743 ± 0.090 | 0.692 ± 0.066 | 0.779 ± 0.101 | 0.662 ± 0.107 | 0.719 ± 0.084 | — | — |
 | Social (n=8) | Derivative PINN (same architecture, cf. Table R2.5a) | 0.586 ± 0.039 | 0.558 ± 0.056 | 0.500 ± 0.000 | 0.500 ± 0.000 | 0.536 ± 0.007 | -0.183 | 0.0010 |
 | Social (n=8) | Without staged λ scheduling | 0.645 ± 0.059 | 0.638 ± 0.063 | 0.651 ± 0.056 | 0.545 ± 0.104 | 0.620 ± 0.043 | -0.099 | 0.0010 |
-| Social (n=8) | Without gradient clipping (sub-ablation) | 0.700 ± 0.126 | 0.647 ± 0.039 | 0.741 ± 0.148 | 0.612 ± 0.123 | 0.675 ± 0.078 | -0.044 | 0.0038 |
+| Social (n=8) | Without pre-activation clipping (sub-ablation) | 0.700 ± 0.126 | 0.647 ± 0.039 | 0.741 ± 0.148 | 0.612 ± 0.123 | 0.675 ± 0.078 | -0.044 | 0.0038 |
 | Social (n=8) | Without bounded tensor parameterization | 0.672 ± 0.031 | 0.665 ± 0.033 | 0.670 ± 0.100 | 0.565 ± 0.100 | 0.643 ± 0.038 | -0.076 | 0.2267 |
 | Neuronal (n=30) | Full method | 0.702 ± 0.018 | 0.697 ± 0.007 | 0.675 ± 0.023 | 0.634 ± 0.135 | 0.677 ± 0.036 | — | — |
 | Neuronal (n=30) | Derivative PINN (same architecture, cf. Table R2.5a) | 0.505 ± 0.027 | 0.521 ± 0.023 | 0.525 ± 0.021 | 0.519 ± 0.115 | 0.518 ± 0.037 | -0.159 | 0.0010 |
 | Neuronal (n=30) | Without staged λ scheduling | 0.612 ± 0.037 | 0.595 ± 0.017 | 0.568 ± 0.072 | 0.615 ± 0.145 | 0.598 ± 0.058 | -0.079 | 0.0010 |
-| Neuronal (n=30) | Without gradient clipping (sub-ablation) | 0.646 ± 0.123 | 0.666 ± 0.039 | 0.640 ± 0.073 | 0.600 ± 0.044 | 0.638 ± 0.059 | -0.039 | 0.0131 |
+| Neuronal (n=30) | Without pre-activation clipping (sub-ablation) | 0.646 ± 0.123 | 0.666 ± 0.039 | 0.640 ± 0.073 | 0.600 ± 0.044 | 0.638 ± 0.059 | -0.039 | 0.0131 |
 | Neuronal (n=30) | Without bounded tensor parameterization | 0.645 ± 0.056 | 0.620 ± 0.014 | 0.592 ± 0.063 | 0.640 ± 0.188 | 0.624 ± 0.048 | -0.053 | 0.0010 |
 
 **Table R3.7b — Integral window length**

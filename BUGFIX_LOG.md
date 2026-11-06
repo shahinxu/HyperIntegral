@@ -439,6 +439,32 @@ Social moves furthest because its seed 11 is the best of its ten, 0.730
 against a held-out mean of 0.714 - which is the reason for excluding it.
 The configuration and the tuning-seed score are untouched.
 
+**32. R3.7a called the ablation "gradient clipping" when no gradient is clipped**
+`--no_clip` removes the projection applied to the tensor after the optimizer
+step:
+
+    total.backward()
+    opt.step()
+    if bounded and not no_clip:
+        W.clamp_(-clip_c, clip_c)
+
+That is a projection of the parameter onto the bounded range, not gradient
+clipping. `clip_grad_norm_` appears nowhere in `models/integral/`; the only
+occurrences in the repository are inside HyperPINN, a baseline. The row
+therefore described the proposed method's own parametrisation incorrectly, in
+the table answering the reviewer who asked what that parametrisation is.
+*Fix:* renamed to `Without pre-activation clipping (sub-ablation)` in the
+response, in `check_ours_rows.py` and in the references here. No number
+changes; `OURS_LABEL` already matched the new wording, so the guard still
+covers those rows.
+
+Worth noting alongside item 30's provenance table: this is the one Ours row
+whose *standard deviations* also fail to reproduce, 0/4 where every other
+Ours row is 4/4. Since the code offers only one kind of clipping, the row
+cannot be a different ablation; it has to come from a different batch of
+`no_clip` runs. The Ours side of the document is therefore not the product of
+one set of runs.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository
@@ -483,7 +509,7 @@ two:
 | R2.5a, `Integral (ours)` | 0/4 per row | 4/4 per row |
 | R2.5a, `Derivative` | **4/4 per row** | 4/4 per row |
 | R3.7a, `Full method`, `Without staged λ`, `Without bounded` | 0/4 per row | 4/4 per row |
-| R3.7a, `Without gradient clipping` | 0/4 per row | **0/4 per row** |
+| R3.7a, `Without pre-activation clipping` | 0/4 per row | **0/4 per row** |
 | R3.7a, `Derivative PINN` | **4/4 per row** | 4/4 per row |
 | R3.7b, all 12 rows | 0/4 per row | 4/4 per row |
 | R3.7c, all 12 rows | 0/4 per row | 4/4 per row |
@@ -491,7 +517,7 @@ two:
 The agreement on the standard deviations is exact to the last digit, so those
 came from the runs; the means paired with them did not. The rows that do match
 on both are exactly the derivative baselines - the arm the tables compare
-against. `Without gradient clipping` matches on neither.
+against. `Without pre-activation clipping` matches on neither.
 
 Side by side, ecological at sigma=0.02:
 

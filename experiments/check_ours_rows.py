@@ -26,7 +26,7 @@ TABLES = {
     "R3.7a": {"Full method": "full",
               "Derivative PINN (same architecture, cf. Table R2.5a)": "derivative_loss",
               "Without staged λ scheduling": "no_staged",
-              "Without gradient clipping (sub-ablation)": "no_clip",
+              "Without pre-activation clipping (sub-ablation)": "no_clip",
               "Without bounded tensor parameterization": "no_bounded"},
 }
 
