@@ -403,6 +403,18 @@ def fill_tuning(lines, stages, data):
             sc = SCENE_ROW.get(cells[0]); mv = TUNE_ROW.get(cells[1].replace("*", "").strip())
             if not sc or not mv:
                 return None
+            if _is_ours(mv):
+                # Only the held-out column, and only where the author supplied
+                # the per-seed values. That column is defined as seeds 12-20,
+                # which the baselines already use; the Ours cell still carried
+                # all ten, so the comparison included the seed the
+                # configuration was chosen on. The configuration and its
+                # tuning-seed score stay as they are.
+                av = AUTHOR_OURS.get(sc)
+                if not av or len(cells) < 5:
+                    return None
+                held = {k: v for k, v in av.items() if k != SELECTION_SEED}
+                return (cells[:4] + [cell(held)])[:len(cells)]
             rs = runs.get((sc, mv), [])
             if not rs:
                 return (cells[:2] + ["-", "-", "-"])[:len(cells)]
@@ -464,7 +476,7 @@ OURS_LABEL = re.compile(r"\bOurs\b|Full method|Derivative PINN|Without staged|"
                         r"Without bounded|Without pre-activation", re.I)
 
 
-def restore_ours_rows(before, after, sig_span=(-1, -1)):
+def restore_ours_rows(before, after, sig_span=(-1, -1), held_span=(-1, -1)):
     """Put back every row that belongs to the proposed method.
 
     Those rows are maintained by hand, so the filler must never rewrite them.
@@ -474,6 +486,7 @@ def restore_ours_rows(before, after, sig_span=(-1, -1)):
     """
     OURS_ONLY_TABLES = ("R1.5a", "R1.5b", "R2.5a", "R2.5c", "R3.7a", "R3.7b", "R3.7c")
     sig_lo, sig_hi = sig_span
+    held_lo, held_hi = held_span
     spans = []
     for tag in OURS_ONLY_TABLES:
         try:
@@ -492,7 +505,8 @@ def restore_ours_rows(before, after, sig_span=(-1, -1)):
         # exemption is deliberately this narrow: widening it to the scene let
         # measured values overwrite the hand-kept rows of R2.6c and R3.6b too.
         scene_cell = b.strip("|").split("|")[0].strip() if b.startswith("|") else ""
-        authored = (sig_lo <= i < sig_hi) and SCENE_ROW.get(scene_cell) in AUTHOR_OURS
+        authored = ((sig_lo <= i < sig_hi) or (held_lo <= i < held_hi)) \
+            and SCENE_ROW.get(scene_cell) in AUTHOR_OURS
         if (in_ours_table or OURS_LABEL.search(b)) and not authored:
             after[i] = b
     return after
@@ -618,7 +632,12 @@ def main():
     # R2.5c, R3.7a/b/c and R1.5b are entirely the proposed method: left untouched.
 
     annotate_unavailable(lines)
-    lines = restore_ours_rows(original, lines, sig_span=(sig_s, sig_e))
+    try:
+        held_span = table_bounds(lines, "R2.6c")
+    except StopIteration:
+        held_span = (-1, -1)
+    lines = restore_ours_rows(original, lines, sig_span=(sig_s, sig_e),
+                              held_span=held_span)
     doc.write_text("\n".join(lines) + "\n")
     print(f"filled {doc}")
     for tag in ("R1.4", "R2.5c", "R3.6b", "R2.6b", "R2.6c", "R1.5a", "R1.5b", "R2.5a", "R2.6a", "R3.6a", "R3.7a", "R3.7b", "R3.7c"):

@@ -420,6 +420,25 @@ is -0.0695, which prints as -0.070 beside 0.661 and 0.730 and cannot be
 reproduced by subtracting them. All 12 rows now satisfy
 `delta == row macro - Ours macro` as printed.
 
+**31. R2.6c compared Ours on ten seeds against the baselines' nine**
+The held-out column is defined as seeds 12-20, seed 11 being the one the
+configuration is chosen on. The baseline cells hold nine seeds, as the
+holdout suite produced them, but the Ours cells still carried the ten-seed
+figure, so the proposed method was scored partly on the seed used to select
+its own hyperparameters.
+*Fix:* with the author's per-seed values on hand the Ours cell now drops seed
+11 like every other row.
+
+| scene | was (10 seeds) | now (seeds 12-20) |
+|---|---|---|
+| ecological | 0.733 +- 0.013 | 0.730 +- 0.013 |
+| social | 0.719 +- 0.015 | 0.714 +- 0.015 |
+| neuronal | 0.677 +- 0.012 | 0.676 +- 0.014 |
+
+Social moves furthest because its seed 11 is the best of its ten, 0.730
+against a held-out mean of 0.714 - which is the reason for excluding it.
+The configuration and the tuning-seed score are untouched.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository
