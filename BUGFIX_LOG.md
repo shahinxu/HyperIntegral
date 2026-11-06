@@ -496,8 +496,32 @@ reaches 2e-11 - but 1/1000 is the floor of a permutation test at 1000
 resamples, and the column is headed `paired t p`. Either the label is wrong
 or the five values cannot all be paired-t results.
 
-Left as printed: this is the Ours side of an ablation table, and resolving it
-needs the per-seed values behind those rows.
+*Resolved:* the author supplied all twelve variants' per-seed macro-AUCs,
+now in `ours_seed_values.json` under `ablation_macro_auc`. Each of the twelve
+reproduces its printed mean and standard deviation to three decimals, so
+these are the runs the table was written from. The macro column, the delta
+and the paired test are now computed from them; the four per-order columns
+are untouched, since only the macro was supplied.
+
+Recomputing moves eight of the twelve p-values, and two conclusions with
+them:
+
+| row | printed | recomputed |
+|---|---|---|
+| ecological / Without staged lambda | 0.0010 | 0.0062 |
+| ecological / Without bounded | 0.0010 | **0.0490** |
+| social / Without pre-activation clipping | 0.0038 | **0.1517** |
+| neuronal / Without pre-activation clipping | 0.0131 | **0.0769** |
+| neuronal / Without staged lambda | 0.0010 | 0.0026 |
+| neuronal / Without bounded | 0.0010 | 0.0095 |
+
+Both clipping rows lose significance at 0.05 and ecological / Without
+bounded is left at 0.049. Every `0.0010` is gone, which is consistent with
+those five having been a floor rather than a computed value.
+
+The Full method macro also follows the per-seed values: 0.733 -> 0.730 and
+0.719 -> 0.716, neuronal unchanged at 0.677. Deltas shift by the same amount,
+and all 12 rows satisfy `delta == row macro - Full method macro` as printed.
 
 ## Open finding, not fixed: the proposed method's means are not in the records
 

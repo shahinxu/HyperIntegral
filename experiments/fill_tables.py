@@ -75,6 +75,29 @@ def _author_ours():
 AUTHOR_OURS = _author_ours()
 
 
+def _author_ablations():
+    """R3.7a's variants, scene -> variant -> {seed: macro}, author-supplied."""
+    f = Path(__file__).with_name("ours_seed_values.json")
+    if not f.exists():
+        return {}
+    raw = json.loads(f.read_text()).get("ablation_macro_auc", {})
+    return {sc: {var: {11 + i: v for i, v in enumerate(vals)}
+                 for var, vals in d.items()} for sc, d in raw.items()}
+
+
+AUTHOR_ABLATIONS = _author_ablations()
+
+# R3.7a row label -> the variant it switches off. `full` is the Ours run,
+# which AUTHOR_OURS already holds.
+R37A_ROW = {
+    "Full method": "full",
+    "Derivative PINN (same architecture, cf. Table R2.5a)": "derivative_loss",
+    "Without staged λ scheduling": "no_staged",
+    "Without pre-activation clipping (sub-ablation)": "no_clip",
+    "Without bounded tensor parameterization": "no_bounded",
+}
+
+
 def load(*stage_dirs, noise=MAIN_NOISE):
     """per-(scene, variant) -> {order/macro -> {seed: value}}
 
@@ -488,7 +511,8 @@ OURS_LABEL = re.compile(r"\bOurs\b|Full method|Derivative PINN|Without staged|"
                         r"Without bounded|Without pre-activation", re.I)
 
 
-def restore_ours_rows(before, after, sig_span=(-1, -1), held_span=(-1, -1)):
+def restore_ours_rows(before, after, sig_span=(-1, -1), held_span=(-1, -1),
+                      abl_span=(-1, -1)):
     """Put back every row that belongs to the proposed method.
 
     Those rows are maintained by hand, so the filler must never rewrite them.
@@ -499,6 +523,7 @@ def restore_ours_rows(before, after, sig_span=(-1, -1), held_span=(-1, -1)):
     OURS_ONLY_TABLES = ("R1.5a", "R1.5b", "R2.5a", "R2.5c", "R3.7a", "R3.7b", "R3.7c")
     sig_lo, sig_hi = sig_span
     held_lo, held_hi = held_span
+    abl_lo, abl_hi = abl_span
     spans = []
     for tag in OURS_ONLY_TABLES:
         try:
@@ -517,7 +542,8 @@ def restore_ours_rows(before, after, sig_span=(-1, -1), held_span=(-1, -1)):
         # exemption is deliberately this narrow: widening it to the scene let
         # measured values overwrite the hand-kept rows of R2.6c and R3.6b too.
         scene_cell = b.strip("|").split("|")[0].strip() if b.startswith("|") else ""
-        authored = ((sig_lo <= i < sig_hi) or (held_lo <= i < held_hi)) \
+        authored = ((sig_lo <= i < sig_hi) or (held_lo <= i < held_hi)
+                    or (abl_lo <= i < abl_hi)) \
             and SCENE_ROW.get(scene_cell) in AUTHOR_OURS
         if (in_ours_table or OURS_LABEL.search(b)) and not authored:
             after[i] = b
@@ -635,7 +661,36 @@ def main():
 
     fill_table(lines, s, e, rowfill_sig)
 
-    # R1.5a/b, R2.5a, R2.5c, R3.7a/b/c are entirely the proposed method
+    # R3.7a: macro, delta and the paired test, from the author's per-seed
+    # values. The four per-order columns are left alone - those need per-order
+    # values, and only the macro was supplied.
+    try:
+        abl_s, abl_e = table_bounds(lines, "R3.7a")
+
+        def fa(cells):
+            sc = SCENE_ROW.get(cells[0])
+            var = R37A_ROW.get(cells[1].replace("*", "").strip())
+            if not sc or not var or len(cells) < 9:
+                return None
+            per = AUTHOR_ABLATIONS.get(sc, {})
+            full = AUTHOR_OURS.get(sc)
+            vals = full if var == "full" else per.get(var)
+            if not vals or not full:
+                return None
+            out = list(cells)
+            out[6] = cell(vals)
+            if var == "full":
+                out[7], out[8] = "—", "—"
+            else:
+                d, tp, _ = paired(vals, full)
+                out[7], out[8] = d, tp
+            return out[:len(cells)]
+
+        fill_table(lines, abl_s, abl_e, fa)
+    except StopIteration:
+        abl_s, abl_e = -1, -1
+
+    # R1.5a/b, R2.5a, R2.5c, R3.7b/c are entirely the proposed method
     # and are maintained by hand; only baseline-bearing tables are written.
     fill_tuning(lines, [d for d in sorted(glob.glob('results/paper/*'))
                         if os.path.basename(d).startswith('tuning')], data_tuning)
@@ -649,7 +704,7 @@ def main():
     except StopIteration:
         held_span = (-1, -1)
     lines = restore_ours_rows(original, lines, sig_span=(sig_s, sig_e),
-                              held_span=held_span)
+                              held_span=held_span, abl_span=(abl_s, abl_e))
     doc.write_text("\n".join(lines) + "\n")
     print(f"filled {doc}")
     for tag in ("R1.4", "R2.5c", "R3.6b", "R2.6b", "R2.6c", "R1.5a", "R1.5b", "R2.5a", "R2.6a", "R3.6a", "R3.7a", "R3.7b", "R3.7c"):
