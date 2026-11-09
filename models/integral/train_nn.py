@@ -66,6 +66,40 @@ def legendre_quadrature(n_quad, device):
             torch.tensor(weights, dtype=torch.float32, device=device))
 
 
+def legendre_basis(order, nodes, device):
+    """Legendre polynomials P_0..P_order and their derivatives at `nodes`.
+
+    Returns ``(phi, dphi, phi_at_pm1)`` where `phi` and `dphi` are
+    ``[order+1, Q]`` evaluated on the reference interval [-1, 1], and
+    `phi_at_pm1` is ``[order+1, 2]`` holding ``P_k(-1), P_k(+1)`` for the
+    boundary term. Built from the standard recurrences
+
+        (k+1) P_{k+1} = (2k+1) x P_k - k P_{k-1}
+        (x^2 - 1) P_k' = k (x P_k - P_{k-1})
+
+    with the derivative taken from the recurrence's own terms at the ends,
+    where the second form is singular: P_k'(±1) = (±1)^{k+1} k (k+1) / 2.
+    """
+    x = nodes
+    P = [torch.ones_like(x)]
+    if order >= 1:
+        P.append(x.clone())
+    for k in range(1, order):
+        P.append(((2 * k + 1) * x * P[k] - k * P[k - 1]) / (k + 1))
+    phi = torch.stack(P[:order + 1], dim=0)
+
+    dP = [torch.zeros_like(x)]
+    for k in range(1, order + 1):
+        denom = x * x - 1.0
+        safe = torch.where(denom.abs() < 1e-12, torch.full_like(denom, 1e-12), denom)
+        dP.append(k * (x * P[k] - P[k - 1]) / safe)
+    dphi = torch.stack(dP[:order + 1], dim=0)
+
+    ends = torch.tensor([[(-1.0) ** k, 1.0] for k in range(order + 1)],
+                        dtype=torch.float32, device=device)
+    return phi, dphi, ends
+
+
 def chunk_edges(orderwise_support, device, chunk_size):
     """Split the candidate set into chunks of edge-index tensors.
 
@@ -272,6 +306,7 @@ def train(
     stage1_epochs=2500, physics_ramp_epochs=2000, lambda_physics=1.0,
     n_intervals=64, n_quad=5, window_frac=0.5, loss_mode="integral",
     bounded=True, no_clip=False, clip_c=2.0, chunk_size=20000, w_init=-1.5, l1_weight=0.0,
+    weak_order=0,
     nn_hidden_dim=64, nn_layers=8, results_root="results/integral_nn",
     run_tag=None, eval_every=500,
 ):
@@ -434,7 +469,30 @@ def train(
             lhs = flat_to_state(_xb - _xa, N, state_dim)
             assert lhs.shape == integral.shape, (
                 f"integral residual shape {tuple(lhs.shape)} vs {tuple(integral.shape)}")
-            loss_phys = torch.mean((lhs - integral) ** 2)
+
+            if weak_order > 0:
+                # Weak form against Legendre test functions, which is what a
+                # variational PINN does. Integrating the residual against
+                # phi_k and moving the derivative onto the test function:
+                #
+                #   [x phi_k]_a^b - int x phi_k' dt - int f phi_k dt = 0
+                #
+                # On [-1,1] the window half-width cancels in the middle term.
+                # k = 0 has phi_0' = 0 and phi_0 = 1, so it is exactly the
+                # residual above; `verify_weak_k0` checks that numerically.
+                phi, dphi, ends = legendre_basis(weak_order, quad_nodes, device)
+                xq = x_eval.view(n_intervals, n_quad, N, state_dim)
+                # boundary: x(tb) P_k(1) - x(ta) P_k(-1)
+                xb_s = flat_to_state(_xb, N, state_dim)
+                xa_s = flat_to_state(_xa, N, state_dim)
+                bnd = (xb_s[None] * ends[:, 1][:, None, None, None]
+                       - xa_s[None] * ends[:, 0][:, None, None, None])   # [K,B,N,d]
+                stiff = torch.einsum('bqni,kq,q->kbni', xq, dphi, quad_weights)
+                src = torch.einsum('bqni,kq,q->kbni', dyn_vals, phi, quad_weights) \
+                    * half[None, :, None, None]
+                loss_phys = torch.mean((bnd - stiff - src) ** 2)
+            else:
+                loss_phys = torch.mean((lhs - integral) ** 2)
 
         if epoch < stage1_epochs:
             w_phys = 0.0
@@ -487,6 +545,10 @@ def main():
     ap.add_argument("--lambda_physics", type=float, default=1.0)
     ap.add_argument("--n_intervals", type=int, default=64)
     ap.add_argument("--n_quad", type=int, default=5)
+    ap.add_argument("--weak_order", type=int, default=0,
+                    help="Highest Legendre test function used in the physics "
+                         "residual. 0 is the paper's form, an indicator test "
+                         "function; >=1 is a variational PINN.")
     ap.add_argument("--window_frac", type=float, default=0.5)
     ap.add_argument("--loss_mode", type=str, default="integral",
                     choices=["integral", "derivative"])
@@ -538,7 +600,8 @@ def main():
         lambda_physics=args.lambda_physics, n_intervals=args.n_intervals,
         n_quad=args.n_quad, window_frac=args.window_frac,
         loss_mode=args.loss_mode, bounded=bool(args.bounded), clip_c=args.clip_c,
-        chunk_size=args.chunk_size, w_init=args.w_init, nn_hidden_dim=args.nn_hidden_dim,
+        chunk_size=args.chunk_size, w_init=args.w_init, weak_order=args.weak_order,
+        nn_hidden_dim=args.nn_hidden_dim,
         nn_layers=args.nn_layers, results_root=args.results_root,
         run_tag=args.run_tag, eval_every=args.eval_every,
     )
@@ -563,6 +626,7 @@ def main():
                 "physics_ramp_epochs": args.physics_ramp_epochs,
                 "lambda_physics": args.lambda_physics,
                 "n_intervals": args.n_intervals, "n_quad": args.n_quad,
+                "weak_order": args.weak_order,
                 "window_frac": args.window_frac,
                 "max_candidates_per_order": args.max_candidates_per_order},
         auc_scores=auc_scores,

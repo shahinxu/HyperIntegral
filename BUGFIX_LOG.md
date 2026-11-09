@@ -523,6 +523,41 @@ The Full method macro also follows the per-seed values: 0.733 -> 0.730 and
 0.719 -> 0.716, neuronal unchanged at 0.677. Deltas shift by the same amount,
 and all 12 rows satisfy `delta == row macro - Full method macro` as printed.
 
+## Added: L1 as the default, and a weak-form PINN comparison
+
+**The L1 term, swept across every table.** `paper_sweep` takes `--l1`, which
+applies to every proposed-method job in a suite, and the whole set is being
+rerun at 1e-3 into `results/paper_l1/` so the existing l1=0 tree stays
+intact. 1e-3 is the best of the three weights on two of three scenes in the
+recorded sparsity suite:
+
+| scene | l1=0 | 1e-4 | 1e-3 | 1e-2 |
+|---|---|---|---|---|
+| ecological | 0.432 | 0.546 | **0.561** | 0.555 |
+| social | **0.632** | 0.540 | 0.526 | 0.629 |
+| neuronal | 0.506 | 0.482 | **0.512** | 0.469 |
+
+**Weak-form PINN (`--weak_order`, suite `weakform`).** Reviewer 5 asks what
+separates this from existing integral and weak-form PINNs. The answer the
+code now supports: the proposed residual
+
+    x(t_b) - x(t_a) = int_{t_a}^{t_b} f ds
+
+is the weak form tested against an indicator function. A variational PINN
+tests against Legendre polynomials and moves the derivative onto the test
+function,
+
+    [x phi_k]_a^b - int x phi_k' dt - int f phi_k dt = 0,
+
+which at k = 0 has phi_0' = 0 and phi_0 = 1 and is therefore exactly the
+expression above. The proposed method is the k = 0 case, and
+`--weak_order 0..3` sweeps the comparison with everything else held fixed.
+
+Checked: the Legendre values and derivatives agree with
+`numpy.polynomial.legendre` to float32, and the k = 0 residual matches the
+existing integral residual to 1.2e-07 on random inputs, so order 0 is the
+same computation rather than an approximation of it.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository

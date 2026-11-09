@@ -155,17 +155,17 @@ All AUC entries: mean ± std over 10 independent random seeds. 95% Confidence In
 
 | Scene | Method | Best configuration | Macro-AUC (tuning seed) | Macro-AUC (held-out seeds) |
 |---|---|---|---|---|
-| Ecological (n=9) | Ours | lr=0.005, n_intervals=128 | 0.742 | 0.730 ± 0.013 |
+| Ecological (n=9) | Ours | lr=0.005, n_intervals=128 | 0.742 | 0.729 ± 0.027 |
 | Ecological (n=9) | HyperPINN | lr=0.0005, epochs=14000 | 0.678 | 0.659 ± 0.022 |
 | Ecological (n=9) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.719 | 0.520 ± 0.036 |
 | Ecological (n=9) | THIS | $\lambda_1$=0.0001, $\rho$=0.1 | 0.623 | 0.562 ± 0.041 |
 | Ecological (n=9) | Integral SINDy | threshold=0.0001, window=20 | 0.504 | 0.477 ± 0.056 |
-| Social (n=8) | Ours | lr=0.001, n_intervals=16 | 0.725 | 0.714 ± 0.015 |
+| Social (n=8) | Ours | lr=0.001, n_intervals=16 | 0.725 | 0.713 ± 0.014 |
 | Social (n=8) | HyperPINN | lr=0.005, epochs=7000 | 0.681 | 0.606 ± 0.067 |
 | Social (n=8) | Kernel-based | $\sigma_k$=1.0, $\lambda$=0.1 | 0.586 | 0.475 ± 0.078 |
 | Social (n=8) | THIS | $\lambda_1$=0.0001, $\rho$=0.0001 | 0.530 | 0.426 ± 0.071 |
 | Social (n=8) | Integral SINDy | threshold=0.0001, window=5 | 0.511 | 0.489 ± 0.032 |
-| Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.676 ± 0.014 |
+| Neuronal (n=30) | Ours | lr=0.0005, n_intervals=128 | 0.685 | 0.668 ± 0.014 |
 | Neuronal (n=30) | HyperPINN | lr=0.005, epochs=1500 | 0.426 | 0.514 ± 0.037 |
 | Neuronal (n=30) | Kernel-based | $\sigma_k$=100.0, $\lambda$=0.1 | 0.547 | 0.510 ± 0.026 |
 | Neuronal (n=30) | THIS | $\lambda_1$=0.0001, $\rho$=0.001 | 0.470 | 0.483 ± 0.043 |

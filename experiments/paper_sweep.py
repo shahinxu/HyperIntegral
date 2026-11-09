@@ -59,9 +59,16 @@ def ours(tag, scene, noise, seed, cfg, extra=(), meta=None):
     _cap = cfg["max_cand"] or cap_for(scene)
     if _cap:
         cli += ["--max_candidates_per_order", str(_cap)]
+    # A sweep-wide L1 weight, so the whole set of tables can be reproduced
+    # with the sparsity term switched on. Individual jobs that set their own
+    # --l1 in `extra` (the sparsity suite's sweep) still win, since the later
+    # flag is the one argparse keeps.
+    if cfg.get("l1"):
+        cli += ["--l1", str(cfg["l1"])]
     cli += list(extra)
     m = {"method": "integral_pinn_nn", "variant": "ours", "scene": scene,
-         "noise": noise, "seed": seed, "n_nodes": SCENES[scene]["n"]}
+         "noise": noise, "seed": seed, "n_nodes": SCENES[scene]["n"],
+         "l1": cfg.get("l1") or 0.0}
     m.update(meta or {})
     return dict(name=tag, module="models.integral.train_nn", cli=cli, meta=m, scene=scene)
 
@@ -376,7 +383,29 @@ def suite_holdout(cfg):
     return jobs
 
 
+def suite_weakform(cfg):
+    """The proposed residual against variational PINNs on the same surrogate.
+
+    Reviewer 5 asks what separates this from existing integral / weak-form
+    PINNs. The residual here is the weak form tested against an indicator
+    function; a VPINN tests against Legendre polynomials and moves the
+    derivative onto the test function. Order 0 reduces to the proposed form
+    exactly, so the sweep is `weak_order` 0..3 with everything else fixed.
+    """
+    jobs = []
+    for sc in cfg["scenes"]:
+        for noise in cfg["noises"]:
+            for seed in cfg["seeds"]:
+                for k in (0, 1, 2, 3):
+                    tag = f"weak{k}_{sc}_noise{noise}_seed{seed}"
+                    jobs.append(ours(tag, sc, noise, seed, cfg,
+                                     ["--weak_order", str(k)],
+                                     meta={"variant": f"weak_{k}", "weak_order": k}))
+    return jobs
+
+
 SUITES = {"main": suite_main, "ablation": suite_ablation, "holdout": suite_holdout,
+          "weakform": suite_weakform,
           "noise": suite_noise, "sigma_h": suite_sigma_h,
           "sparsity": suite_sparsity, "tuning": suite_tuning}
 
@@ -467,6 +496,9 @@ def main():
     ap.add_argument("--stage1", type=int, default=2500)
     ap.add_argument("--ramp", type=int, default=2000)
     ap.add_argument("--max_cand", type=int, default=0)
+    ap.add_argument("--l1", type=float, default=0.0,
+                    help="L1 weight applied to every proposed-method job in "
+                         "the suite. 0 keeps the original behaviour.")
     ap.add_argument("--bl_epochs", type=int, default=14000)
     ap.add_argument("--bl_epochs_neuronal", type=int, default=3000,
                     help="HyperPINN epoch budget on the neuronal scene.")
@@ -491,7 +523,7 @@ def main():
                n_epochs=a.n_epochs, lr=a.lr, stage1=a.stage1, ramp=a.ramp,
                max_cand=a.max_cand, bl_epochs=a.bl_epochs, bl_lr=a.bl_lr,
                thr=a.thr, win=a.win, bl_epochs_neuronal=a.bl_epochs_neuronal,
-               tuning_dirs=a.tuning_dirs)
+               tuning_dirs=a.tuning_dirs, l1=a.l1)
     jobs = SUITES[a.suite](cfg)
     if a.skip_variants:
         skip = set(a.skip_variants)
