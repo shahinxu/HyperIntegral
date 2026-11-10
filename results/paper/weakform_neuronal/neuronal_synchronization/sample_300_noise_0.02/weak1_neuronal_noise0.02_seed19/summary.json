@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "timestamp": "2026-11-10T04:28:20",
+  "timestamp": "2026-11-10T04:35:59",
   "method": "integral_pinn_nn[integral]",
   "scene": "neuronal_synchronization",
   "config": {
@@ -27,14 +27,14 @@
     "max_candidates_per_order": 3000
   },
   "auc": {
-    "2-edges": 0.4935748792270532,
-    "3-edges": 0.5021545403271291,
-    "4-edges": 0.5068745808182428,
-    "5-edges": 0.5036776997659645
+    "2-edges": 0.45806763285024155,
+    "3-edges": 0.496243654822335,
+    "4-edges": 0.507349653476414,
+    "5-edges": 0.42678034102306917
   },
   "extra_metrics": {
-    "macro_auc": 0.5015704250345974,
+    "macro_auc": 0.47211032054301494,
     "library_size": 9435,
-    "n_nonzero": 8482
+    "n_nonzero": 7781
   }
 }

@@ -1,0 +1,34 @@
+[
+  {
+    "order_label": "2-edges",
+    "n_support": 28,
+    "n_true": 12,
+    "auc": 0.5,
+    "score_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/2_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/2_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "3-edges",
+    "n_support": 56,
+    "n_true": 8,
+    "auc": 0.5,
+    "score_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/3_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/3_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "4-edges",
+    "n_support": 70,
+    "n_true": 4,
+    "auc": 0.5,
+    "score_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/4_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/4_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "5-edges",
+    "n_support": 56,
+    "n_true": 2,
+    "auc": 0.5,
+    "score_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/5_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform/social_contagion/sample_300_noise_0.02/weak3_social_noise0.02_seed16/roc_data/5_edges_roc_curve.csv"
+  }
+]

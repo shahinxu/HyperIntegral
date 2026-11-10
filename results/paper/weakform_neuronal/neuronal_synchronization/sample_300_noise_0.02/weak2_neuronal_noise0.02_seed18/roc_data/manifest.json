@@ -1,0 +1,34 @@
+[
+  {
+    "order_label": "2-edges",
+    "n_support": 435,
+    "n_true": 90,
+    "auc": 0.4933977455716586,
+    "score_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/2_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/2_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "3-edges",
+    "n_support": 3000,
+    "n_true": 45,
+    "auc": 0.5099529986839632,
+    "score_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/3_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/3_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "4-edges",
+    "n_support": 3000,
+    "n_true": 18,
+    "auc": 0.4333314703033013,
+    "score_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/4_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/4_edges_roc_curve.csv"
+  },
+  {
+    "order_label": "5-edges",
+    "n_support": 3000,
+    "n_true": 9,
+    "auc": 0.3551580667929715,
+    "score_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/5_edges_scores.csv",
+    "roc_curve_file": "results/paper/weakform_neuronal/neuronal_synchronization/sample_300_noise_0.02/weak2_neuronal_noise0.02_seed18/roc_data/5_edges_roc_curve.csv"
+  }
+]
