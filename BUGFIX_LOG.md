@@ -558,6 +558,34 @@ Checked: the Legendre values and derivatives agree with
 existing integral residual to 1.2e-07 on random inputs, so order 0 is the
 same computation rather than an approximation of it.
 
+**34. The ablation suite mixes two training budgets inside one table**
+`train_nn.py` defaults to 20 000 epochs, every sweep passes 8 000, and the
+recorded `ablation` runs hold both. On ecological, `full` exists only at
+20 000 while each of the ten compared variants has two seeds at 20 000 and
+one at 8 000, which `load()` then averages together:
+
+| variant | 8 000 | 20 000 |
+|---|---|---|
+| full | — | 0.447 ± 0.028 |
+| no_staged | 0.348 | 0.545 ± 0.004 |
+| no_bounded | 0.568 | 0.399 ± 0.096 |
+| window_0.25 | 0.474 | 0.724 ± 0.027 |
+| window_1.0 | 0.525 | 0.336 ± 0.014 |
+
+Within one variant the two budgets differ by up to 0.197, and the baseline
+difference is 0.097 (0.432 at 20 000 against 0.529 at 8 000) - larger than any
+ablation effect the table reports. R2.5a, R3.7a, R3.7b and R3.7c all draw
+from this suite, so their deltas may be reporting budget rather than
+component. Social and neuronal use 8 000 throughout and are unaffected.
+
+This also explains the L1 result: +0.123 in the sparsity suite at 20 000
+against -0.085 in the main suite at 8 000. The 20 000-epoch baseline is the
+weaker of the two, so part of what L1 recovers there is the cost of the longer
+run.
+*Fix in progress:* everything is being rerun at 20 000 / 2 500 / 2 000 into
+`results/paper_e20/`, at the author's instruction, so one budget holds across
+every table.
+
 ## Open finding, not fixed: the proposed method's means are not in the records
 
 ### Where those means come from: nowhere in the repository

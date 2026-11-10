@@ -13,6 +13,13 @@ the paper draft. The source file is given for each block.
 | epochs | 20 000 |
 | data-only stage | 2 500 epochs |
 | physics ramp | 2 000 epochs |
+
+The epoch figures above are the file's defaults and the budget the current
+rerun uses. The results recorded before that rerun were produced at 8 000 /
+1 500 / 1 000, because every sweep passed those explicitly, and the ablation
+suite holds a mixture of the two. The gap between the budgets is larger than
+any effect in the ablation table (0.097 on ecological), so the two are not
+interchangeable; see BUGFIX_LOG.md.
 | λ_physics after the ramp | 1.0 |
 | sampled intervals per step | 64 |
 | Gauss–Legendre nodes per interval | 5 |
