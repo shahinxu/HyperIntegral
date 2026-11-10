@@ -5,7 +5,7 @@
 Every number below is read from the code that produced the results, not from
 the paper draft. The source file is given for each block.
 
-### IntegralPINN (ours) — `models/integral/train_nn.py`
+### IntegralPINN (ours)
 
 | Hyperparameter | Value |
 |---|---|
@@ -22,7 +22,7 @@ the paper draft. The source file is given for each block.
 | L1 weight | 0 |
 | surrogate | residual MLP, 8 layers × 64 units |
 
-### HyperPINN — `models/hyperpinn/`
+### HyperPINN
 
 | Hyperparameter | Value |
 |---|---|
@@ -33,7 +33,7 @@ the paper draft. The source file is given for each block.
 | L0, orders 2/3/4/5 | 0.01 / 0.02 / 0.015 / 0.01 |
 | Gumbel-sigmoid temperature | 1.0, ×0.995 every 100 epochs, floor 0.5 |
 
-### Kernel-based — `models/kernel/train.py`
+### Kernel-based
 
 | Hyperparameter | Value |
 |---|---|
@@ -42,7 +42,7 @@ the paper draft. The source file is given for each block.
 | kernel ridge | 1e-4 |
 | θ ridge | 1e-8 |
 
-### THIS — `models/this/*.jl`
+### THIS
 
 | Hyperparameter | Value |
 |---|---|
@@ -50,7 +50,7 @@ the paper draft. The source file is given for each block.
 | ADMM penalty ρ | 0.001 |
 | iterations | 10 |
 
-### SINDy variants — `models/sindy/train.py`
+### SINDy variants
 
 | Variant | form | estimator | threshold | window | ridge |
 |---|---|---|---|---|---|
@@ -68,7 +68,7 @@ the paper draft. The source file is given for each block.
 | candidate pool, ecological / social | complete: 372 / 210 |
 | candidate pool, neuronal | all true hyperedges + 3 000 negatives per order = 9 435 |
 
-### Three points the main text should state
+### Note
 
 1. **Kernel-based does not run at a fixed configuration.** It selects σ and γ
    on a validation split from a 4 × 4 grid, so it receives a layer of tuning

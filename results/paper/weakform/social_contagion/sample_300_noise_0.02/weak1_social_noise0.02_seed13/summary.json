@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-10T03:26:32",
+  "method": "integral_pinn_nn[integral]",
+  "scene": "social_contagion",
+  "config": {
+    "n_nodes": 8,
+    "max_order": 5,
+    "n_samples": 300,
+    "noise": 0.02,
+    "n_epochs": 8000,
+    "lr": 0.001,
+    "seed": 13,
+    "loss_mode": "integral",
+    "bounded": true,
+    "no_clip": false,
+    "clip_c": 2.0,
+    "w_init": -1.5,
+    "l1": 0.0,
+    "stage1_epochs": 1500,
+    "physics_ramp_epochs": 1000,
+    "lambda_physics": 1.0,
+    "n_intervals": 64,
+    "n_quad": 5,
+    "weak_order": 1,
+    "window_frac": 0.5,
+    "max_candidates_per_order": 0
+  },
+  "auc": {
+    "2-edges": 0.5963541666666666,
+    "3-edges": 0.5911458333333334,
+    "4-edges": 0.48484848484848486,
+    "5-edges": 0.5
+  },
+  "extra_metrics": {
+    "macro_auc": 0.5430871212121212,
+    "library_size": 210,
+    "n_nonzero": 0
+  }
+}
