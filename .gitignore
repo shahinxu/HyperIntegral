@@ -14,9 +14,8 @@ results/
 # Scene presets define the benchmarks and must be versioned
 !lib_*/presets/*.json
 
-# results/ above keeps the 4.5 GB of run payloads out of git. The manifests
-# fill_tables.py and repair_results.py read (results.jsonl, summary.json) are
-# only ~1.6 MB and are committed with `git add -f`; a negation cannot reach
-# them here because their parent directory is excluded.
-
+# Local rebuttal / handoff notes (keep out of GitHub)
 /REBUTTAL_RESPONSE.md
+/BUGFIX_LOG.md
+/HANDOFF.md
+/rebuttal_bundle/
