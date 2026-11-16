@@ -142,7 +142,7 @@ function main()
     dmax = max_order
 
     println("[THIS neuronal] running THIS with n=$(size(X,1)), T=$(size(X,2)), dmax=$dmax, lambda=$λ, rho=$ρ")
-    Ainf, coeff, relerr = this(X, Y, ooi, dmax, λ, ρ, niter)
+    Ainf, coeff, relerr = this(X, Y, ooi, dmax, λ, ρ, niter; apply_hard_threshold=true)
 
     order_key = Dict(2 => "edges", 3 => "triangles", 4 => "quads", 5 => "quints")
     lines = String[]

@@ -142,10 +142,10 @@ function main()
     dmax = max_order
 
     println("[THIS social] running THIS(train) with n=$(size(X_train,1)), T=$(size(X_train,2)), dmax=$dmax, lambda=$λ, rho=$ρ")
-    Ainf_train, coeff_train, relerr_train = this(X_train, Y_train, ooi, dmax, λ, ρ, niter)
+    Ainf_train, coeff_train, relerr_train = this(X_train, Y_train, ooi, dmax, λ, ρ, niter; apply_hard_threshold=true)
 
     println("[THIS social] running THIS(test) with n=$(size(X_test,1)), T=$(size(X_test,2)), dmax=$dmax, lambda=$λ, rho=$ρ")
-    Ainf_test, coeff_test, relerr_test = this(X_test, Y_test, ooi, dmax, λ, ρ, niter)
+    Ainf_test, coeff_test, relerr_test = this(X_test, Y_test, ooi, dmax, λ, ρ, niter; apply_hard_threshold=true)
 
     lines = String[]
     push!(lines, "scene=social_contagion")

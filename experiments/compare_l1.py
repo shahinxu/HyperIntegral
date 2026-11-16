@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--base", default="results/paper")
     ap.add_argument("--l1", default="results/paper_l1")
     ap.add_argument("--only", default="", help="substring filter on the variant")
+    ap.add_argument("--label_base", default="l1=0")
+    ap.add_argument("--label_l1", default="l1>0")
     a = ap.parse_args()
 
     b, l = load(a.base), load(a.l1)
@@ -63,7 +65,7 @@ def main():
         print("no overlapping runs yet")
         return
     print(f"{'suite':12s} {'scene':11s} {'variant':16s} "
-          f"{'l1=0':24s} {'l1>0':24s} {'Δ':>7s} {'paired p':>9s}")
+          f"{a.label_base:24s} {a.label_l1:24s} {'Δ':>7s} {'paired p':>9s}")
     for k in keys:
         if a.only and a.only not in (k[2] or ""):
             continue

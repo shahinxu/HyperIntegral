@@ -275,7 +275,7 @@ def suite_tuning(cfg):
                               "noise": noise, "seed": seed, "n_nodes": SCENES[sc]["n"],
                               "sigma_k": sg, "lam": lam}))
             if True:
-                for l1 in [1e-4, 1e-3, 1e-2, 1e-1]:
+                for l1 in [1e-3, 1e-2, 0.05, 1e-1]:
                     for rho in [1e-4, 1e-3, 1e-2, 1e-1]:
                         j = this_method(f"tune_this_l1{l1}_rho{rho}_{sc}",
                                         sc, noise, seed, cfg)
